@@ -57,13 +57,14 @@ func main() {
 			return
 		}
 		if !strings.HasPrefix(cert.Issuer.CommonName, "Let's Encrypt Authority") {
-			fmt.Fprintf(os.Stderr, "skipping (index %d, offset %d) %#v\n", ep.Index, offset+ep.Offset, cert.Issuer.CommonName)
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "skipping (index %d, offset %d) %#v\n", ep.Index, offset+ep.Offset, cert.Issuer.CommonName)
+			}
 			return
 		}
-		fmt.Printf("GOT IT (index %d, offset %d) %#v\n", ep.Index, offset+ep.Offset, cert.Issuer.CommonName)
-		os.Exit(0)
+
 		// De-dupe just in case.
-		var names map[string]struct{}
+		names := make(map[string]struct{})
 		if cert.Subject.CommonName != "" {
 			names[cert.Subject.CommonName] = struct{}{}
 		}
@@ -92,6 +93,6 @@ func makeCSVRecord(name string, ep *certificatetransparency.Entry, cert *x509.Ce
 		name,
 		cert.SerialNumber.String(),
 		strconv.FormatInt(cert.NotBefore.UTC().Unix(), 10),
-		strconv.FormatUint(ep.Timestamp, 10),
+		strconv.FormatInt(ep.Time.UTC().Unix(), 10),
 	}
 }
