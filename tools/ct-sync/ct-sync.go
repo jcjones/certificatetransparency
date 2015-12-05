@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agl/certificatetransparency"
+	"github.com/jmhodges/certificatetransparency"
 )
 
 func clearLine() {
