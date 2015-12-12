@@ -97,7 +97,7 @@ NvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==
 	statusChan := make(chan certificatetransparency.OperationStatus, 1)
 	wg := new(sync.WaitGroup)
 	displayProgress(statusChan, wg)
-	_, err = certificatetransparency.PilotLog.DownloadRange(out, statusChan, count, sth.Size)
+	_, err = ctLog.DownloadRange(out, statusChan, count, sth.Size)
 	wg.Wait()
 
 	clearLine()
