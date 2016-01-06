@@ -1,0 +1,198 @@
+// Based on github.com/jmhodges/certificatetransparency/tools/lecsv
+
+package main
+
+import (
+	"crypto/x509"
+	"database/sql"
+	_ "github.com/go-sql-driver/mysql"
+	"gopkg.in/gorp.v1"
+
+	"flag"
+	"fmt"
+	"log"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/jcjones/certificatetransparency"
+)
+
+var (
+	inputPath = flag.String("i", "", "file path to Certificate Transparency log file")
+	dbConnect = flag.String("dbConnect", "", "DB Connection String")
+	verbose   = flag.Bool("v", false, "verbose output")
+)
+
+type Certificate struct {
+  Serial    string    `db:"serial"`    // The Issuer field of this cert
+  Issuer    string    `db:"issuer"`    // The Issuer field of this cert
+  Subject   string    `db:"subject"`   // The Subject field of this cert
+  NotBefore time.Time `db:"notBefore"` // Date after which this cert should be considered invalid
+  NotAfter  time.Time `db:"notAfter"`  // Date after which this cert should be considered invalid
+  EntryTime time.Time `db:"entryTime"` // Date after which this cert should be considered invalid
+}
+
+type SubjectName struct {
+  Name   string `db:"name"`   // identifier
+  Serial string `db:"serial"` // The hex encoding of the SHA-1 hash of a cert containing the identifier
+  Issuer string `db:"issuer"` // The Issuer field of this cert
+}
+
+// Taken from Boulder
+func recombineURLForDB(dbConnect string) (string, error) {
+  dbConnect = strings.TrimSpace(dbConnect)
+  dbURL, err := url.Parse(dbConnect)
+  if err != nil {
+    return "", err
+  }
+
+  if dbURL.Scheme != "mysql+tcp" {
+    format := "given database connection string was not a mysql+tcp:// URL, was %#v"
+    return "", fmt.Errorf(format, dbURL.Scheme)
+  }
+
+  dsnVals, err := url.ParseQuery(dbURL.RawQuery)
+  if err != nil {
+    return "", err
+  }
+
+  dsnVals.Set("parseTime", "true")
+
+  // Required to make UPDATE return the number of rows matched,
+  // instead of the number of rows changed by the UPDATE.
+  dsnVals.Set("clientFoundRows", "true")
+
+  // Ensures that MySQL/MariaDB warnings are treated as errors. This
+  // avoids a number of nasty edge conditions we could wander
+  // into. Common things this discovers includes places where data
+  // being sent had a different type than what is in the schema,
+  // strings being truncated, writing null to a NOT NULL column, and
+  // so on. See
+  // <https://dev.mysql.com/doc/refman/5.0/en/sql-mode.html#sql-mode-strict>.
+  dsnVals.Set("strict", "true")
+
+  user := dbURL.User.Username()
+  passwd, hasPass := dbURL.User.Password()
+  dbConn := ""
+  if user != "" {
+    dbConn = url.QueryEscape(user)
+  }
+  if hasPass {
+    dbConn += ":" + passwd
+  }
+  dbConn += "@tcp(" + dbURL.Host + ")"
+  return dbConn + dbURL.EscapedPath() + "?" + dsnVals.Encode(), nil
+}
+
+func initTables(dbMap *gorp.DbMap) {
+  dbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(false, "Serial")
+  dbMap.AddTableWithName(SubjectName{}, "name")
+
+  dbMap.CreateTablesIfNotExists()
+}
+
+func main() {
+	flag.Parse()
+	log.SetFlags(0)
+	log.SetPrefix("")
+	entryFilePath := *inputPath
+	dbConnectStr, err := recombineURLForDB(*dbConnect)
+	if err != nil {
+		log.Fatalf("unable to parse %s: %s", *dbConnect, err)
+	}
+
+	if len(entryFilePath) == 0 || len(dbConnectStr) == 0 {
+		flag.Usage()
+		os.Exit(2)
+	}
+
+	f, err := os.Open(entryFilePath)
+	if err != nil {
+		log.Fatalf("unable to open %#v: %s", entryFilePath, err)
+	}
+
+	ef := certificatetransparency.EntriesFile{f}
+
+	db, err := sql.Open("mysql", dbConnectStr)
+	if err != nil {
+		log.Fatalf("unable to open SQL: %s: %s", dbConnectStr, err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatalf("unable to ping SQL: %s: %s", dbConnectStr, err)
+	}
+
+	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
+	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
+	initTables(dbMap)
+
+	err = ef.Map(func(ep *certificatetransparency.EntryAndPosition, err error) {
+		if err != nil {
+			return
+		}
+		cert, err := x509.ParseCertificate(ep.Entry.X509Cert)
+		if err != nil {
+			return
+		}
+		if !strings.HasPrefix(cert.Issuer.CommonName, "Let's Encrypt Authority") {
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "skipping (index %d, offset %d) %#v\n", ep.Index, ep.Offset, cert.Issuer.CommonName)
+			}
+			return
+		}
+
+		serialNum := fmt.Sprintf("%036x", cert.SerialNumber)
+
+		certObj, err := dbMap.Get(Certificate{}, serialNum)
+		if err != nil {
+			log.Fatalf("Could not query for serial %s: %s", serialNum, err)
+		}
+		if certObj != nil {
+			// Already in DB. Skip.
+			return
+		}
+
+		certObj = &Certificate{
+			Serial:    serialNum,
+			Issuer:    cert.Issuer.CommonName,
+			Subject:   cert.Subject.CommonName,
+			NotBefore: cert.NotBefore.UTC(),
+			NotAfter:  cert.NotAfter.UTC(),
+			EntryTime: ep.Entry.Time.UTC(),
+		}
+		err = dbMap.Insert(certObj)
+		if err != nil {
+			log.Fatalf("unable to insert: %#v: %s", certObj, err)
+		}
+
+		// De-dupe just in case.
+		names := make(map[string]struct{})
+		if cert.Subject.CommonName != "" {
+			names[cert.Subject.CommonName] = struct{}{}
+		}
+		for _, name := range cert.DNSNames {
+			names[name] = struct{}{}
+		}
+
+		// Loop and insert into the DB
+		for name, _ := range names {
+			nameObj := &SubjectName{
+				Name:   name,
+				Serial: serialNum,
+				Issuer: cert.Issuer.CommonName,
+			}
+			err = dbMap.Insert(nameObj)
+			if err != nil {
+				log.Fatalf("unable to insert: %#v: %s", nameObj, err)
+			}
+		}
+
+		if err != nil {
+			return
+		}
+	})
+	if err != nil {
+		log.Fatalf("error while searching CT entries file: %s", err)
+	}
+}
