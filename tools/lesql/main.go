@@ -128,24 +128,24 @@ func main() {
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	initTables(dbMap)
 
-  entriesFile, offset, length, err := downloadLog(fileHandle)
+  entriesFile, offset, length, startingOffset, err := downloadLog(fileHandle)
   if err != nil {
     log.Fatalf("error while searching CT entries file: %s", err)
   }
 
   // Reimport all entries
   if (*reimport) {
-    offset = 0
+    startingOffset = 0
   }
 
-  if offset != length {
-    _, err = entriesFile.Seek(int64(offset), 0)
+  if (offset != length || *reimport) {
+    _, err = entriesFile.Seek(int64(startingOffset), 0)
     if err != nil {
-      log.Fatalf("unable to seek to %d in %#v: %s", offset, entryFilePath, err)
+      log.Fatalf("unable to seek to %d in %#v: %s", startingOffset, entryFilePath, err)
     }
 
     if (*verbose) {
-      fmt.Printf("Seeked to %d len %d in %#v\n", offset, length, entryFilePath)
+      fmt.Printf("Seeked to %d len %d in %#v\n", startingOffset, length, entryFilePath)
     }
 
     err = processLog(dbMap, entriesFile)
@@ -191,16 +191,22 @@ func displayProgress(statusChan chan certificatetransparency.OperationStatus, wg
   }()
 }
 
-func downloadLog(fileHandle *os.File) (*certificatetransparency.EntriesFile, uint64, uint64, error) {
+func downloadLog(fileHandle *os.File) (*certificatetransparency.EntriesFile, uint64, uint64, int64, error) {
   entriesFile := certificatetransparency.EntriesFile{fileHandle}
 
   fmt.Printf("Counting existing entries... ")
   count, err := entriesFile.Count()
   if err != nil {
-    fmt.Fprintf(os.Stderr, "\nFailed to read entries file: %s\n", err)
-    os.Exit(1)
+    err = fmt.Errorf("Failed to read entries file: %s", err)
+    return nil, 0, 0, 0, err
   }
   fmt.Printf("%d\n", count)
+
+  // Get the starting offset
+  startingOffset, err := entriesFile.Seek(0, 1)
+  if err != nil {
+    return nil, 0, 0, 0, err
+  }
 
   certlyPEM := `-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2M
@@ -209,18 +215,18 @@ NvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==
 
   ctLog, err := certificatetransparency.NewLog("https://log.certly.io", certlyPEM)
   if err != nil {
-    return nil, 0, 0, err
+    return nil, 0, 0, 0, err
   }
   fmt.Printf("Fetching signed tree head... ")
   sth, err := ctLog.GetSignedTreeHead()
 
   if err != nil {
-    return nil, 0, 0, err
+    return nil, 0, 0, 0, err
   }
   fmt.Printf("%d total entries at %s\n", sth.Size, sth.Time.Format(time.ANSIC))
   if count == sth.Size {
     fmt.Printf("Nothing to do\n")
-    return &entriesFile, count, sth.Size, nil
+    return &entriesFile, count, sth.Size, startingOffset, nil
   }
 
   statusChan := make(chan certificatetransparency.OperationStatus, 1)
@@ -232,7 +238,7 @@ NvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==
   clearLine()
   if err != nil {
     err = fmt.Errorf("Error while downloading: %s", err)
-    return nil, 0, 0, err
+    return nil, 0, 0, 0, err
   }
 
   fmt.Printf("Hashing tree\n")
@@ -246,14 +252,14 @@ NvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==
   clearLine()
   if err != nil {
     err = fmt.Errorf("Error hashing tree: %s", err)
-    return nil, 0, 0, err
+    return nil, 0, 0, 0, err
   }
   if !bytes.Equal(treeHash[:], sth.Hash) {
     err = fmt.Errorf("Hashes do not match! Calculated: %x, STH contains %x", treeHash, sth.Hash)
-    return nil, 0, 0, err
+    return nil, 0, 0, 0, err
   }
 
-  return &entriesFile, count, sth.Size, nil
+  return &entriesFile, count, sth.Size, startingOffset, nil
 }
 
 func processLog(dbMap *gorp.DbMap, ef *certificatetransparency.EntriesFile) (error) {
