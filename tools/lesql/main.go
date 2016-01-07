@@ -8,12 +8,14 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"gopkg.in/gorp.v1"
 
+  "bytes"
 	"flag"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"strings"
+  "sync"
 	"time"
 
 	"github.com/jcjones/certificatetransparency"
@@ -23,6 +25,7 @@ var (
 	inputPath = flag.String("i", "", "file path to Certificate Transparency log file")
 	dbConnect = flag.String("dbConnect", "", "DB Connection String")
 	verbose   = flag.Bool("v", false, "verbose output")
+  reimport  = flag.Bool("r", false, "reimport all into MySQL")
 )
 
 type Certificate struct {
@@ -108,12 +111,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	f, err := os.Open(entryFilePath)
+  fileHandle, err := os.OpenFile(entryFilePath, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		log.Fatalf("unable to open %#v: %s", entryFilePath, err)
 	}
-
-	ef := certificatetransparency.EntriesFile{f}
 
 	db, err := sql.Open("mysql", dbConnectStr)
 	if err != nil {
@@ -127,7 +128,138 @@ func main() {
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	initTables(dbMap)
 
-	err = ef.Map(func(ep *certificatetransparency.EntryAndPosition, err error) {
+  entriesFile, offset, length, err := downloadLog(fileHandle)
+  if err != nil {
+    log.Fatalf("error while searching CT entries file: %s", err)
+  }
+
+  // Reimport all entries
+  if (*reimport) {
+    offset = 0
+  }
+
+  if offset != length {
+    _, err = entriesFile.Seek(int64(offset), 0)
+    if err != nil {
+      log.Fatalf("unable to seek to %d in %#v: %s", offset, entryFilePath, err)
+    }
+
+    if (*verbose) {
+      fmt.Printf("Seeked to %d len %d in %#v\n", offset, length, entryFilePath)
+    }
+
+    err = processLog(dbMap, entriesFile)
+    if err != nil {
+      log.Fatalf("error while searching CT entries file: %s", err)
+    }
+  }
+}
+
+func clearLine() {
+  fmt.Printf("\x1b[80D\x1b[2K")
+}
+
+func displayProgress(statusChan chan certificatetransparency.OperationStatus, wg *sync.WaitGroup) {
+  wg.Add(1)
+
+  go func() {
+    defer wg.Done()
+    symbols := []string{"|", "/", "-", "\\"}
+    symbolIndex := 0
+
+    status, ok := <-statusChan
+    if !ok {
+      return
+    }
+
+    ticker := time.NewTicker(200 * time.Millisecond)
+    defer ticker.Stop()
+
+    for {
+      select {
+      case status, ok = <-statusChan:
+        if !ok {
+          return
+        }
+      case <-ticker.C:
+        symbolIndex = (symbolIndex + 1) % len(symbols)
+      }
+
+      clearLine()
+      fmt.Printf("%s %.1f%% (%d of %d)", symbols[symbolIndex], status.Percentage(), status.Current, status.Length)
+    }
+  }()
+}
+
+func downloadLog(fileHandle *os.File) (*certificatetransparency.EntriesFile, uint64, uint64, error) {
+  entriesFile := certificatetransparency.EntriesFile{fileHandle}
+
+  fmt.Printf("Counting existing entries... ")
+  count, err := entriesFile.Count()
+  if err != nil {
+    fmt.Fprintf(os.Stderr, "\nFailed to read entries file: %s\n", err)
+    os.Exit(1)
+  }
+  fmt.Printf("%d\n", count)
+
+  certlyPEM := `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECyPLhWKYYUgEc+tUXfPQB4wtGS2M
+NvXrjwFCCnyYJifBtd2Sk7Cu+Js9DNhMTh35FftHaHu6ZrclnNBKwmbbSA==
+-----END PUBLIC KEY-----`
+
+  ctLog, err := certificatetransparency.NewLog("https://log.certly.io", certlyPEM)
+  if err != nil {
+    return nil, 0, 0, err
+  }
+  fmt.Printf("Fetching signed tree head... ")
+  sth, err := ctLog.GetSignedTreeHead()
+
+  if err != nil {
+    return nil, 0, 0, err
+  }
+  fmt.Printf("%d total entries at %s\n", sth.Size, sth.Time.Format(time.ANSIC))
+  if count == sth.Size {
+    fmt.Printf("Nothing to do\n")
+    return &entriesFile, count, sth.Size, nil
+  }
+
+  statusChan := make(chan certificatetransparency.OperationStatus, 1)
+  wg := new(sync.WaitGroup)
+  displayProgress(statusChan, wg)
+  _, err = ctLog.DownloadRange(fileHandle, statusChan, count, sth.Size)
+  wg.Wait()
+
+  clearLine()
+  if err != nil {
+    err = fmt.Errorf("Error while downloading: %s", err)
+    return nil, 0, 0, err
+  }
+
+  fmt.Printf("Hashing tree\n")
+  entriesFile.Seek(0, 0)
+  statusChan = make(chan certificatetransparency.OperationStatus, 1)
+  wg = new(sync.WaitGroup)
+  displayProgress(statusChan, wg)
+  treeHash, err := entriesFile.HashTree(statusChan, sth.Size)
+  wg.Wait()
+
+  clearLine()
+  if err != nil {
+    err = fmt.Errorf("Error hashing tree: %s", err)
+    return nil, 0, 0, err
+  }
+  if !bytes.Equal(treeHash[:], sth.Hash) {
+    err = fmt.Errorf("Hashes do not match! Calculated: %x, STH contains %x", treeHash, sth.Hash)
+    return nil, 0, 0, err
+  }
+
+  return &entriesFile, count, sth.Size, nil
+}
+
+func processLog(dbMap *gorp.DbMap, ef *certificatetransparency.EntriesFile) (error) {
+  fmt.Printf("Importing entries into DB...\n")
+
+	err := ef.Map(func(ep *certificatetransparency.EntryAndPosition, err error) {
 		if err != nil {
 			return
 		}
@@ -135,10 +267,9 @@ func main() {
 		if err != nil {
 			return
 		}
+
+    // Skip non-LE entries
 		if !strings.HasPrefix(cert.Issuer.CommonName, "Let's Encrypt Authority") {
-			if *verbose {
-				fmt.Fprintf(os.Stderr, "skipping (index %d, offset %d) %#v\n", ep.Index, ep.Offset, cert.Issuer.CommonName)
-			}
 			return
 		}
 
@@ -150,8 +281,15 @@ func main() {
 		}
 		if certObj != nil {
 			// Already in DB. Skip.
+      if *verbose {
+        fmt.Println(fmt.Sprintf("Skipping %s (index %d, offset %d) %#v", serialNum, ep.Index, ep.Offset, cert.Subject.CommonName))
+      }
 			return
 		}
+
+    if *verbose {
+      fmt.Println(fmt.Sprintf("Processing %s (index %d, offset %d) %#v", serialNum, ep.Index, ep.Offset, cert.Subject.CommonName))
+    }
 
 		certObj = &Certificate{
 			Serial:    serialNum,
@@ -192,7 +330,5 @@ func main() {
 			return
 		}
 	})
-	if err != nil {
-		log.Fatalf("error while searching CT entries file: %s", err)
-	}
+  return err
 }
