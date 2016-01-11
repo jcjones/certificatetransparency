@@ -42,6 +42,9 @@ class DataViz(object):
 
     rawdata = {'date':[], 'issuedThatWeek':[]}
 
+
+    print("      Date\tIssued\tUnexpired\tExpired\trate/min")
+
     for row in cur.fetchall():
       datestamp = row[0]
       numIssued = int(row[1])
@@ -70,7 +73,6 @@ class DataViz(object):
         printDate = datestamp + datetime.timedelta(1)
         minutesElapsed = 24.0 * 60
 
-      print("      Date\tIssued\tUnexpired\tExpired\trate/min")
       print("{date}\t{numIssued:6}\t{unexpired:9}\t{expired:7}\t{rate:8.3f}".format(
           date=printDate.strftime("%Y-%m-%d"),
           numIssued=numIssued,
@@ -92,7 +94,7 @@ class DataViz(object):
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("-v", dest='verbosity', help="Increase verbosity", action='count')
-  parser.add_argument("--config", help="Config File", default="plot.cfg")
+  parser.add_argument("--config", help="Config File", default="stats_gen.conf")
 
   args = parser.parse_args()
 
