@@ -199,7 +199,20 @@ func downloadRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogEnt
   return index, nil
 }
 
-func downloadLog(ctLog *client.LogClient, db *sqldb.EntriesDatabase) (error) {
+func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDatabase) (error) {
+  fmt.Printf("Fetching signed tree head... ")
+  sth, err := ctLog.GetSTH()
+  if err != nil {
+    return err
+  }
+
+  // Set pointer in DB, now that we've verified the log works
+  err = db.SetLog(fmt.Sprintf("%s%s", ctLogUrl.Host, ctLogUrl.Path))
+  if err != nil {
+    log.Fatalf("unable to set Certificate Log: %s", err)
+  }
+
+  // Now we're OK to use the DB
   fmt.Printf("Counting existing entries... ")
   origCount, err := db.Count()
   if err != nil {
@@ -207,12 +220,6 @@ func downloadLog(ctLog *client.LogClient, db *sqldb.EntriesDatabase) (error) {
     return err
   }
   fmt.Printf("%d\n", origCount)
-
-  fmt.Printf("Fetching signed tree head... ")
-  sth, err := ctLog.GetSTH()
-  if err != nil {
-    return err
-  }
 
   fmt.Printf("%d total entries at %s\n", sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
   if origCount == sth.TreeSize {
@@ -277,13 +284,14 @@ func main() {
     log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)
   }
 
-  ctLog := client.New(*logUrl)
-  err = entriesDb.SetLog(*logUrl)
+  ctLogUrl, err := url.Parse(*logUrl)
   if err != nil {
     log.Fatalf("unable to set Certificate Log: %s", err)
   }
 
-  err = downloadLog(ctLog, entriesDb)
+  ctLog := client.New(*logUrl)
+
+  err = downloadLog(ctLogUrl, ctLog, entriesDb)
   if err != nil {
     log.Fatalf("error while updating CT entries: %s", err)
   }
