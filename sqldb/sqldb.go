@@ -17,6 +17,7 @@ import (
   "github.com/go-gorp/gorp"
   "github.com/google/certificate-transparency/go"
   "github.com/google/certificate-transparency/go/x509"
+  "github.com/jcjones/ct-sql/censysdata"
 )
 
 type Certificate struct {
@@ -51,6 +52,11 @@ type CertificateLogEntry struct {
   EntryTime time.Time `db:"entryTime"` // Date when this certificate was added to the log
 }
 
+type CensysEntry struct {
+  CertID    uint64    `db:"certID"`    // Internal Cert Identifier (FK to Certificate)
+  EntryTime time.Time `db:"entryTime"` // Date when this certificate was imported from Censys.io
+}
+
 func Uint64ToTimestamp(timestamp uint64) time.Time {
   return time.Unix(int64(timestamp/1000), int64(timestamp%1000))
 }
@@ -66,6 +72,9 @@ func (edb *EntriesDatabase) InitTables() error {
   if edb.Verbose {
     edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
   }
+
+  censysEntryTable := edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
+  censysEntryTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
 
   logTable := edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog")
   logTable.SetKeys(true, "LogID")
@@ -127,26 +136,7 @@ func (edb *EntriesDatabase) SetLog(url string) error {
   return nil
 }
 
-func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
-  var cert *x509.Certificate
-  var err error
-
-  switch entry.Leaf.TimestampedEntry.EntryType {
-    case ct.X509LogEntryType:
-      cert, err = x509.ParseCertificate(entry.Leaf.TimestampedEntry.X509Entry)
-    case ct.PrecertLogEntryType:
-      cert, err = x509.ParseTBSCertificate(entry.Leaf.TimestampedEntry.PrecertEntry.TBSCertificate)
-  }
-
-  if err != nil {
-    return err
-  }
-
-  // Skip unimportant entries, if configured
-  if edb.IssuerFilter != nil && !strings.HasPrefix(cert.Issuer.CommonName, *edb.IssuerFilter) {
-    return nil
-  }
-
+func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Transaction, uint64, error) {
   //
   // Find the Certificate's issuing CA, using a loop since this is contentious.
   // Also, this is lame. TODO: Be smarter with insertion mutexes
@@ -155,7 +145,7 @@ func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
   var issuerObj Issuer
   for {
     // Try to find a matching one first
-    err = edb.DbMap.SelectOne(&issuerObj, "SELECT * FROM issuer WHERE authorityKeyId = ?", base64.StdEncoding.EncodeToString(cert.AuthorityKeyId))
+    err := edb.DbMap.SelectOne(&issuerObj, "SELECT * FROM issuer WHERE authorityKeyId = ?", base64.StdEncoding.EncodeToString(cert.AuthorityKeyId))
     if err != nil {
       //
       // This is a new issuer, so let's add it to the database
@@ -182,7 +172,7 @@ func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
 
   txn, err := edb.DbMap.Begin()
   if err != nil {
-    return err
+    return nil, 0, err
   }
 
   // Parse the serial number
@@ -215,7 +205,7 @@ func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
     err = txn.Insert(certObj)
     if err != nil {
       txn.Rollback()
-      return fmt.Errorf("DB error on cert: %#v: %s", certObj, err)
+      return nil, 0, fmt.Errorf("DB error on cert: %#v: %s", certObj, err)
     }
 
     certId = certObj.CertID
@@ -242,9 +232,23 @@ func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
       err = txn.Insert(nameObj)
       if err != nil {
         txn.Rollback()
-        return fmt.Errorf("DB error on name: %#v: %s", nameObj, err)
+        return nil, 0, fmt.Errorf("DB error on name: %#v: %s", nameObj, err)
       }
     }
+  }
+
+  return txn, certId, err
+}
+
+func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) error {
+  cert, err := x509.ParseCertificate(entry.CertBytes)
+  if err != nil {
+    return err
+  }
+
+  txn, certId, err := edb.insertCertificate(cert)
+  if err != nil {
+    return err
   }
 
   //
@@ -252,7 +256,59 @@ func (edb *EntriesDatabase) InsertEntry(entry *ct.LogEntry) error {
   //
   var entryCount int
 
-  err = txn.SelectOne(&entryCount, "SELECT COUNT(1) FROM ctlogentry WHERE certID = ? AND logID = ?", certId, edb.LogId)
+  err = txn.SelectOne(&entryCount, "SELECT COUNT(1) FROM censysentry WHERE certID = ?", certId)
+  if err != nil {
+    txn.Rollback()
+    return fmt.Errorf("DB error finding existing censys entries for CertID %v: %s", certId, err)
+  }
+
+  if entryCount == 0 {
+    // Not found yet, so insert it.
+    certEntry := &CensysEntry{
+      CertID:    certId,
+      EntryTime: *entry.Timestamp,
+    }
+    err = txn.Insert(certEntry)
+    if err != nil {
+      txn.Rollback()
+      return fmt.Errorf("DB error on censys entry: %#v: %s", certEntry, err)
+    }
+  }
+  err = txn.Commit()
+  return err
+}
+
+func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
+  var cert *x509.Certificate
+  var err error
+
+  switch entry.Leaf.TimestampedEntry.EntryType {
+    case ct.X509LogEntryType:
+      cert, err = x509.ParseCertificate(entry.Leaf.TimestampedEntry.X509Entry)
+    case ct.PrecertLogEntryType:
+      cert, err = x509.ParseTBSCertificate(entry.Leaf.TimestampedEntry.PrecertEntry.TBSCertificate)
+  }
+
+  if err != nil {
+    return err
+  }
+
+  // Skip unimportant entries, if configured
+  if edb.IssuerFilter != nil && !strings.HasPrefix(cert.Issuer.CommonName, *edb.IssuerFilter) {
+    return nil
+  }
+
+  txn, certId, err := edb.insertCertificate(cert)
+  if err != nil {
+    return err
+  }
+
+  //
+  // Insert the appropriate CertificateLogEntry
+  //
+  var entryCount int
+
+  err = txn.SelectOne(&entryCount, "SELECT COUNT(1) FROM ctlogentry WHERE entryID = ? AND logID = ?", entry.Index, edb.LogId)
   if err != nil {
     txn.Rollback()
     return fmt.Errorf("DB error finding existing log entries for CertID %v with LogID %v: %s", certId, edb.LogId, err)

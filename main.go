@@ -23,14 +23,18 @@ import (
   "github.com/go-gorp/gorp"
   "github.com/google/certificate-transparency/go"
   "github.com/google/certificate-transparency/go/client"
+  "github.com/jcjones/ct-sql/censysdata"
   "github.com/jcjones/ct-sql/sqldb"
 )
 
 var (
-  logUrl    = flag.String("log", "https://log.certly.io", "URL of the CT Log")
-  dbConnect = flag.String("dbConnect", "", "DB Connection String")
-  verbose   = flag.Bool("v", false, "verbose output")
-  limit     = flag.Uint64("limit", 0, "limit processing to this many entries")
+  logUrl     = flag.String("log", "", "URL of the CT Log")
+  censysPath = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
+  dbConnect  = flag.String("dbConnect", "", "DB Connection String")
+  verbose    = flag.Bool("v", false, "verbose output")
+  offset     = flag.Uint64("offset", 0, "offset from the beginning")
+  limit      = flag.Uint64("limit", 0, "limit processing to this many entries")
+
 )
 
 // OperationStatus contains the current state of a large operation (i.e.
@@ -146,22 +150,36 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
   }()
 }
 
-func insertWorker(entries <-chan ct.LogEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
+func insertCTWorker(entries <-chan ct.LogEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
   wg.Add(1)
   defer wg.Done()
   for ep := range entries {
-    err := db.InsertEntry(&ep)
+    err := db.InsertCTEntry(&ep)
     if err != nil {
       log.Printf("Problem inserting certificate: index: %d log: %s error: %s", ep.Index, *logUrl, err)
     }
   }
 }
 
+func insertCensysWorker(entries <-chan censysdata.CensysEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
+  wg.Add(1)
+  defer wg.Done()
+  for ep := range entries {
+    if ep.Valid_nss {
+      err := db.InsertCensysEntry(&ep)
+      if err != nil {
+        log.Printf("Problem inserting certificate: index: %d error: %s", ep.Offset, err)
+      }
+    }
+  }
+}
+
+
 // DownloadRange downloads log entries from the given starting index till one
 // less than upTo. If status is not nil then status updates will be written to
 // it until the function is complete, when it will be closed. The log entries
 // are provided to an output channel.
-func downloadRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogEntry,
+func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogEntry,
                             status chan<- OperationStatus, start, upTo int64) (int64, error) {
   if outEntries == nil {
     return 0, fmt.Errorf("No output channel provided")
@@ -212,14 +230,19 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
     log.Fatalf("unable to set Certificate Log: %s", err)
   }
 
+  var origCount uint64
   // Now we're OK to use the DB
-  fmt.Printf("Counting existing entries... ")
-  origCount, err := db.Count()
-  if err != nil {
-    err = fmt.Errorf("Failed to read entries file: %s", err)
-    return err
+  if *offset > 0 {
+    log.Printf("Starting from offset %d", *offset)
+    origCount = *offset
+  } else {
+    log.Printf("Counting existing entries... ")
+    origCount, err = db.Count()
+    if err != nil {
+      err = fmt.Errorf("Failed to read entries file: %s", err)
+      return err
+    }
   }
-  fmt.Printf("%d\n", origCount)
 
   fmt.Printf("%d total entries at %s\n", sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
   if origCount == sth.TreeSize {
@@ -240,15 +263,60 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 
   displayProgress(statusChan, wg)
   for i := 0; i < runtime.NumCPU(); i++ {
-    go insertWorker(entryChan, db, wg)
+    go insertCTWorker(entryChan, db, wg)
   }
-  _, err = downloadRangeToChannel(ctLog, entryChan, statusChan, int64(origCount), int64(endPos))
+  _, err = downloadCTRangeToChannel(ctLog, entryChan, statusChan, int64(origCount), int64(endPos))
   wg.Wait()
 
   clearLine()
   if err != nil {
     err = fmt.Errorf("Error while downloading: %s", err)
     return err
+  }
+
+  return nil
+}
+
+func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
+  entryChan := make(chan censysdata.CensysEntry, 100)
+  defer close(entryChan)
+  statusChan := make(chan OperationStatus, 1)
+  defer close(statusChan)
+  wg.Add(1)
+  defer wg.Done()
+
+  displayProgress(statusChan, wg)
+  for i := 0; i < runtime.NumCPU(); i++ {
+    go insertCensysWorker(entryChan, db, wg)
+  }
+
+  startOffset := 0
+  maxOffset, err := importer.Size()
+  if err != nil {
+    return err
+  }
+
+  // Fast forward
+  if offset != nil {
+    err = importer.SeekLine(*offset)
+    if err != nil {
+      return err
+    }
+  }
+
+  log.Printf("Starting import from %d, line limit=%d size=%d.", startOffset, *limit, maxOffset)
+
+  // We've already fast-forwarded, so start at 0.
+  for index := uint64(0);; index++ {
+    if *limit > uint64(0) && index >= *limit {
+      return nil
+    }
+    ent, err := importer.NextEntry()
+    if err != nil || ent == nil {
+      return err
+    }
+    statusChan <- OperationStatus{int64(startOffset), int64(ent.Offset), int64(maxOffset)}
+    entryChan <- *ent
   }
 
   return nil
@@ -263,7 +331,7 @@ func main() {
     log.Printf("unable to parse %s: %s", *dbConnect, err)
   }
 
-  if len(dbConnectStr) == 0 || logUrl == nil || len(*logUrl) == 0 {
+  if len(dbConnectStr) == 0 || (censysPath == nil && logUrl == nil) {
     flag.Usage()
     os.Exit(2)
   }
@@ -284,15 +352,42 @@ func main() {
     log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)
   }
 
-  ctLogUrl, err := url.Parse(*logUrl)
-  if err != nil {
-    log.Fatalf("unable to set Certificate Log: %s", err)
+  if logUrl != nil && len(*logUrl) > 5 {
+    ctLogUrl, err := url.Parse(*logUrl)
+    if err != nil {
+      log.Fatalf("unable to set Certificate Log: %s", err)
+    }
+
+    ctLog := client.New(*logUrl)
+
+    err = downloadLog(ctLogUrl, ctLog, entriesDb)
+    if err != nil {
+      log.Fatalf("error while updating CT entries: %s", err)
+    }
+
+    os.Exit(0)
   }
 
-  ctLog := client.New(*logUrl)
+  if censysPath != nil && len(*censysPath) > 5 {
+    importer := &censysdata.Importer{}
+    err = importer.OpenFile(*censysPath)
+    if err != nil {
+      log.Fatalf("unable to open Censys file: %s", err)
+    }
+    defer importer.Close()
 
-  err = downloadLog(ctLogUrl, ctLog, entriesDb)
-  if err != nil {
-    log.Fatalf("error while updating CT entries: %s", err)
+    wg := new(sync.WaitGroup)
+    err := processImporter(importer, entriesDb, wg)
+
+    if err != nil {
+      log.Fatalf("error while running importer: %s", err)
+    }
+
+    wg.Wait()
+    os.Exit(0)
   }
+
+  // Didn't include a mandatory action, so print usage and exit.
+  flag.Usage()
+  os.Exit(2)
 }
