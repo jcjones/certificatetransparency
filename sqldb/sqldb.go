@@ -83,6 +83,8 @@ func (edb *EntriesDatabase) InitTables() error {
   certTable := edb.DbMap.AddTableWithName(Certificate{}, "certificate")
   certTable.SetKeys(true, "CertID")
   certTable.AddIndex("SerialIdx", "Hash", []string{"Serial"})
+  certTable.AddIndex("notBeforeIdx", "Hash", []string{"NotBefore"})
+  certTable.AddIndex("notAfterIdx", "Hash", []string{"NotAfter"})
   certTable.SetUniqueTogether("Serial", "IssuerID")
 
   issuerTable := edb.DbMap.AddTableWithName(Issuer{}, "issuer")

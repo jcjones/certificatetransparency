@@ -290,7 +290,7 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
     go insertCensysWorker(entryChan, db, wg)
   }
 
-  startOffset := 0
+  startOffset := *offset
   maxOffset, err := importer.Size()
   if err != nil {
     return err
@@ -307,8 +307,8 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
   log.Printf("Starting import from %d, line limit=%d size=%d.", startOffset, *limit, maxOffset)
 
   // We've already fast-forwarded, so start at 0.
-  for index := uint64(0);; index++ {
-    if *limit > uint64(0) && index >= *limit {
+  for count := uint64(0);; count++ {
+    if *limit > uint64(0) && count >= *limit {
       return nil
     }
     ent, err := importer.NextEntry()

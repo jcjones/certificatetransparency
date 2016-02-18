@@ -7,12 +7,13 @@
 package censysdata
 
 import (
-  "bufio"
   "encoding/base64"
   "encoding/json"
-  "time"
   "fmt"
+  "io"
+  "log"
   "os"
+  "time"
 )
 
 type CensysEntry struct {
@@ -28,16 +29,27 @@ type CensysEntry struct {
 
 type Importer struct {
   currentLine   uint64
-  currentOffset uint64
-  scanner       *bufio.Scanner
+  byteCounter   *ImporterByteCounter
+  decoder       *json.Decoder
   fileHandle    *os.File
+}
+
+type ImporterByteCounter struct {
+  CurrentOffset uint64
+}
+
+func (ibc *ImporterByteCounter) Write(p []byte) (n int, err error) {
+  ibc.CurrentOffset += uint64(len(p))
+  return 0, nil
 }
 
 func (imp *Importer) OpenFile(path string) error {
   imp.currentLine = 0
   fileHandle, err := os.Open(path)
   imp.fileHandle = fileHandle
-  imp.scanner = bufio.NewScanner(imp.fileHandle)
+  imp.byteCounter = &ImporterByteCounter{}
+  readerObj := io.TeeReader(imp.fileHandle, imp.byteCounter)
+  imp.decoder = json.NewDecoder(readerObj)
   return err
 }
 
@@ -46,17 +58,17 @@ func (imp *Importer) Close() error {
 }
 
 func (imp *Importer) SeekLine(lineOffset uint64) error {
-  for startLine := imp.currentLine; imp.currentLine < lineOffset; imp.currentLine++ {
-    ok := imp.scanner.Scan()
-    if !ok {
-      err := imp.scanner.Err()
-      if err != nil {
-        return fmt.Errorf("End of file at line %d while seeking forward %d lines from %d", imp.currentLine, lineOffset, startLine)
-      }
+  for ; imp.currentLine < lineOffset; imp.currentLine++ {
+    obj, err := imp.NextEntry()
+
+    if err != nil {
+      return err
     }
-    rawBytes := imp.scanner.Bytes()
-    imp.currentOffset += uint64(len(rawBytes))
+    if obj == nil {
+      return fmt.Errorf("Unexpected EOF")
+    }
   }
+  log.Printf("Skipped to line %d, offset %d", imp.currentLine, imp.byteCounter.CurrentOffset)
   return nil
 }
 
@@ -69,14 +81,15 @@ func (imp *Importer) Size() (uint64, error) {
 }
 
 func (imp *Importer) NextEntry() (*CensysEntry, error) {
-  ok := imp.scanner.Scan()
-  if !ok {
-    return nil, imp.scanner.Err()
+  if !imp.decoder.More() {
+    return nil, nil
   }
-  rawBytes := imp.scanner.Bytes()
 
   data := &CensysEntry{}
-  err := json.Unmarshal(rawBytes, &data)
+  err := imp.decoder.Decode(&data)
+  if err != nil {
+    return nil, err
+  }
 
   certBytes, err := base64.StdEncoding.DecodeString(data.Raw)
   if err != nil {
@@ -85,7 +98,7 @@ func (imp *Importer) NextEntry() (*CensysEntry, error) {
 
   data.CertBytes = certBytes
   data.LineNumber = imp.currentLine
-  data.Offset = imp.currentOffset
+  data.Offset = imp.byteCounter.CurrentOffset
   data.Timestamp = &time.Time{}
 
   if data.Validation_timestamp != nil {
@@ -96,6 +109,5 @@ func (imp *Importer) NextEntry() (*CensysEntry, error) {
     data.Timestamp = &timestamp
   }
 
-  imp.currentOffset += uint64(len(rawBytes))
   return data, err
 }
