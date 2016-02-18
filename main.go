@@ -33,6 +33,7 @@ var (
   dbConnect  = flag.String("dbConnect", "", "DB Connection String")
   verbose    = flag.Bool("v", false, "verbose output")
   offset     = flag.Uint64("offset", 0, "offset from the beginning")
+  offsetByte = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
   limit      = flag.Uint64("limit", 0, "limit processing to this many entries")
 
 )
@@ -218,6 +219,10 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 }
 
 func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDatabase) (error) {
+  if *offsetByte > 0 {
+    return fmt.Errorf("Cannot set offsetByte for CT log downloads")
+  }
+
   fmt.Printf("Fetching signed tree head... ")
   sth, err := ctLog.GetSTH()
   if err != nil {
@@ -290,21 +295,34 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
     go insertCensysWorker(entryChan, db, wg)
   }
 
-  startOffset := *offset
+  startOffset := *offsetByte
   maxOffset, err := importer.Size()
   if err != nil {
     return err
   }
 
+  //
   // Fast forward
-  if offset != nil {
+  //
+  if *offset >0 && *offsetByte>0 {
+    return fmt.Errorf("You may not set both offset and offsetByte")
+  }
+
+  if *offset > 0 {
     err = importer.SeekLine(*offset)
     if err != nil {
       return err
     }
   }
 
-  log.Printf("Starting import from %d, line limit=%d size=%d.", startOffset, *limit, maxOffset)
+  if *offsetByte > 0 {
+    err = importer.SeekByte(*offsetByte)
+    if err != nil {
+      return err
+    }
+  }
+
+  log.Printf("Starting import from offset=%d, line_limit=%d / size=%d.", importer.ByteOffset(), *limit, maxOffset)
 
   // We've already fast-forwarded, so start at 0.
   for count := uint64(0);; count++ {

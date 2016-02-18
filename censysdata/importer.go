@@ -57,6 +57,13 @@ func (imp *Importer) Close() error {
   return imp.fileHandle.Close()
 }
 
+func (imp *Importer) SeekByte(byteOffset uint64) error {
+  newOffset, err := imp.fileHandle.Seek(int64(byteOffset), 1)
+  log.Printf("Seeked forward %d bytes, now at %d", byteOffset, newOffset)
+  imp.byteCounter.CurrentOffset = uint64(newOffset)
+  return err
+}
+
 func (imp *Importer) SeekLine(lineOffset uint64) error {
   for ; imp.currentLine < lineOffset; imp.currentLine++ {
     obj, err := imp.NextEntry()
@@ -70,6 +77,10 @@ func (imp *Importer) SeekLine(lineOffset uint64) error {
   }
   log.Printf("Skipped to line %d, offset %d", imp.currentLine, imp.byteCounter.CurrentOffset)
   return nil
+}
+
+func (imp *Importer) ByteOffset() uint64 {
+  return imp.byteCounter.CurrentOffset
 }
 
 func (imp *Importer) Size() (uint64, error) {
@@ -98,7 +109,7 @@ func (imp *Importer) NextEntry() (*CensysEntry, error) {
 
   data.CertBytes = certBytes
   data.LineNumber = imp.currentLine
-  data.Offset = imp.byteCounter.CurrentOffset
+  data.Offset = imp.ByteOffset()
   data.Timestamp = &time.Time{}
 
   if data.Validation_timestamp != nil {
