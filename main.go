@@ -333,7 +333,9 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
     if err != nil || ent == nil {
       return err
     }
-    statusChan <- OperationStatus{int64(startOffset), int64(ent.Offset), int64(maxOffset)}
+    if count % 128 == 0 {
+      statusChan <- OperationStatus{int64(startOffset), int64(ent.Offset), int64(maxOffset)}
+    }
     entryChan <- *ent
   }
 
