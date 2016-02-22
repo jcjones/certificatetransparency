@@ -35,7 +35,7 @@ var (
   offset     = flag.Uint64("offset", 0, "offset from the beginning")
   offsetByte = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
   limit      = flag.Uint64("limit", 0, "limit processing to this many entries")
-
+  reproNames = flag.Bool("reprocessNames", false, "reprocess names")
 )
 
 // OperationStatus contains the current state of a large operation (i.e.
@@ -342,6 +342,35 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
   return nil
 }
 
+func reprocessNames(db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
+  statusChan := make(chan OperationStatus, 1)
+  defer close(statusChan)
+  wg.Add(1)
+  defer wg.Done()
+
+  displayProgress(statusChan, wg)
+
+  certIDs, err := db.GetNamesWithoutRegisteredDomains(*limit)
+  if err != nil {
+    return err
+  }
+
+  for count, id := range certIDs {
+    if count % 1 == 0 {
+      statusChan <- OperationStatus{int64(0), int64(count), int64(len(certIDs))}
+    }
+
+    // log.Printf("Object: %+v", id)
+    err = db.ReprocessRegisteredDomainsForCertId(id)
+
+    if err != nil {
+      return err
+    }
+  }
+
+  return nil
+}
+
 func main() {
   flag.Parse()
   log.SetFlags(0)
@@ -370,6 +399,16 @@ func main() {
   err = entriesDb.InitTables()
   if err != nil {
     log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)
+  }
+
+  if *reproNames {
+    wg := new(sync.WaitGroup)
+    err = reprocessNames(entriesDb, wg)
+    if err != nil {
+      log.Fatalf("error while reprocessing the names: %s", err)
+    }
+    wg.Wait()
+    os.Exit(0)
   }
 
   if logUrl != nil && len(*logUrl) > 5 {

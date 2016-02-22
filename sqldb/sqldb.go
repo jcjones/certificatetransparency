@@ -18,6 +18,7 @@ import (
   "github.com/google/certificate-transparency/go"
   "github.com/google/certificate-transparency/go/x509"
   "github.com/jcjones/ct-sql/censysdata"
+  "golang.org/x/net/publicsuffix"
 )
 
 type Certificate struct {
@@ -38,6 +39,13 @@ type Issuer struct {
 type SubjectName struct {
   CertID uint64 `db:"certID"` // Internal Cert Identifier
   Name   string `db:"name"`   // identifier
+}
+
+type RegisteredDomain struct {
+  CertID uint64 `db:"certID"` // Internal Cert Identifier
+  ETLD   string `db:"etld"`   // effective top-level domain
+  Label  string `db:"label"`  // first label
+  Domain string `db:"domain"` // eTLD+first label
 }
 
 type CertificateLog struct {
@@ -73,6 +81,12 @@ func (edb *EntriesDatabase) InitTables() error {
     edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
   }
 
+  domainTable := edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
+  domainTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
+  domainTable.AddIndex("DomainIdx", "Hash", []string{"Domain"})
+  domainTable.AddIndex("LabelIdx", "Hash", []string{"Label"})
+  domainTable.SetUniqueTogether("CertID", "Domain")
+
   censysEntryTable := edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
   censysEntryTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
 
@@ -100,6 +114,7 @@ func (edb *EntriesDatabase) InitTables() error {
   nameTable := edb.DbMap.AddTableWithName(SubjectName{}, "name")
   nameTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
   nameTable.AddIndex("NameIdx", "Hash", []string{"Name"})
+  nameTable.SetUniqueTogether("CertID", "Name")
 
   err := edb.DbMap.CreateTablesIfNotExists()
   if err != nil && edb.Verbose {
@@ -136,6 +151,45 @@ func (edb *EntriesDatabase) SetLog(url string) error {
 
   edb.LogId = certLogObj.LogID
   return nil
+}
+
+func (edb *EntriesDatabase) GetNamesWithoutRegisteredDomains(limit uint64) ([]uint64, error) {
+  var results []uint64
+  query := "SELECT DISTINCT certID FROM name NATURAL LEFT JOIN registereddomain WHERE etld IS NULL"
+
+  if limit > 0 {
+    _, err := edb.DbMap.Select(&results, query + " LIMIT ?", limit)
+    return results, err
+  }
+
+  _, err := edb.DbMap.Select(&results, query)
+  return results, err
+}
+
+func (edb *EntriesDatabase) ReprocessRegisteredDomainsForCertId(certID uint64) error {
+  txn, err := edb.DbMap.Begin()
+  if err != nil {
+    return err
+  }
+
+  results := []SubjectName{}
+  _, err = edb.DbMap.Select(&results, "SELECT * FROM name WHERE certID = ?", certID)
+
+  nameMap := make(map[string]struct{})
+  for _, nameObj := range results {
+    if nameObj.CertID != certID {
+      return fmt.Errorf("CertID didn't match! expected=%d obj=%+v", certID, nameObj)
+    }
+    nameMap[nameObj.Name] = struct{}{}
+  }
+
+  err = edb.insertRegisteredDomains(txn, certID, nameMap)
+  if err != nil {
+    txn.Rollback()
+    return err
+  }
+
+  return txn.Commit()
 }
 
 func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Transaction, uint64, error) {
@@ -237,9 +291,46 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
         return nil, 0, fmt.Errorf("DB error on name: %#v: %s", nameObj, err)
       }
     }
+
+    err = edb.insertRegisteredDomains(txn, certId, names)
+    if err != nil {
+      txn.Rollback()
+      return nil, 0, fmt.Errorf("DB error on registered domains: %#v: %s", certObj, err)
+    }
   }
 
   return txn, certId, err
+}
+
+func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certId uint64, names map[string]struct{}) error {
+  domains := make(map[string]struct{})
+  for name, _ := range names {
+    domain, err := publicsuffix.EffectiveTLDPlusOne(name)
+    if err != nil {
+      // This is non-critical. We'd rather have the cert with an incomplete
+      // eTLD, so mask this error
+      if edb.Verbose {
+        fmt.Printf("%s\n", err)
+      }
+      return nil
+    }
+    domains[domain] = struct{}{}
+  }
+  for domain, _ := range domains {
+    etld, _ := publicsuffix.PublicSuffix(domain)
+    label := strings.Replace(domain, "."+etld, "", 1)
+    domainObj := &RegisteredDomain{
+      CertID: certId,
+      Domain: domain,
+      ETLD: etld,
+      Label: label,
+    }
+    err := txn.Insert(domainObj)
+    if err != nil {
+      return fmt.Errorf("Failed to insert Registered Domain %#v: %s", domainObj, err);
+    }
+  }
+  return nil
 }
 
 func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) error {
