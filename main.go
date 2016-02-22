@@ -125,7 +125,7 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 
-		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm")
+		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm") || strings.Contains(os.Getenv("TERM"), "screen")
 
 		if !isInteractive {
 			ticker.Stop()
@@ -355,7 +355,7 @@ func reprocessNames(db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
 	}
 
 	for count, id := range certIDs {
-		if count%1 == 0 {
+		if count%1024 == 0 {
 			statusChan <- OperationStatus{int64(0), int64(count), int64(len(certIDs))}
 		}
 
