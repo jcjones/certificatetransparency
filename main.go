@@ -359,11 +359,10 @@ func reprocessNames(db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
 			statusChan <- OperationStatus{int64(0), int64(count), int64(len(certIDs))}
 		}
 
-		// log.Printf("Object: %+v", id)
 		err = db.ReprocessRegisteredDomainsForCertId(id)
 
 		if err != nil {
-			return err
+			log.Printf("Problem reprocessing certificate: certID: %d error: %s", id, err)
 		}
 	}
 
