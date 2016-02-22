@@ -285,14 +285,11 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 				Name:   name,
 				CertID: certId,
 			}
-			err = txn.Insert(nameObj)
-			if err != nil {
-				txn.Rollback()
-				return nil, 0, fmt.Errorf("DB error on name: %#v: %s", nameObj, err)
-			}
+			// Ignore errors on insert
+			_ = txn.Insert(nameObj)
 		}
 
-		err = edb.insertRegisteredDomains(txn, certId, names)
+		_ = edb.insertRegisteredDomains(txn, certId, names)
 		if err != nil {
 			txn.Rollback()
 			return nil, 0, fmt.Errorf("DB error on registered domains: %#v: %s", certObj, err)
@@ -312,7 +309,7 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 			if edb.Verbose {
 				fmt.Printf("%s\n", err)
 			}
-			return nil
+			continue
 		}
 		domains[domain] = struct{}{}
 	}
@@ -325,10 +322,8 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 			ETLD:   etld,
 			Label:  label,
 		}
-		err := txn.Insert(domainObj)
-		if err != nil {
-			return fmt.Errorf("Failed to insert Registered Domain %#v: %s", domainObj, err)
-		}
+		// Ignore errors on insert
+		_ = txn.Insert(domainObj)
 	}
 	return nil
 }
