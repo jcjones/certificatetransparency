@@ -18,6 +18,7 @@ import (
 	"github.com/google/certificate-transparency/go"
 	"github.com/google/certificate-transparency/go/x509"
 	"github.com/jcjones/ct-sql/censysdata"
+	"github.com/jpillora/backoff"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -231,8 +232,7 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	}
 
 	//
-	// Now that Issuer (which is contentious) is resolved / committed,
-	// start a transaction
+	// Find/insert the Certificate from/into the DB
 	//
 
 	txn, err := edb.DbMap.Begin()
@@ -240,53 +240,58 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 		return nil, 0, err
 	}
 
+	var certId uint64
+
 	// Parse the serial number
 	serialNum := fmt.Sprintf("%036x", cert.SerialNumber)
 
-	//
-	// Find/insert the Certificate from/into the DB.
-	//
+	err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerObj.IssuerID)
+	if err != nil {
+		//
+		// This is a new certificate, so we need to add it to the certificate DB
+		// as well as pull out its metadata
+		//
 
-	var certId uint64
+		if edb.Verbose {
+			fmt.Println(fmt.Sprintf("Processing %s %#v", serialNum, cert.Subject.CommonName))
+		}
 
-	for {
-		err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerObj.IssuerID)
+		certObj := &Certificate{
+			Serial:    serialNum,
+			IssuerID:  issuerObj.IssuerID,
+			Subject:   cert.Subject.CommonName,
+			NotBefore: cert.NotBefore.UTC(),
+			NotAfter:  cert.NotAfter.UTC(),
+		}
+		err = txn.Insert(certObj)
 		if err != nil {
-			//
-			// This is a new certificate, so we need to add it to the certificate DB
-			// as well as pull out its metadata
-			//
-
-			if edb.Verbose {
-				fmt.Println(fmt.Sprintf("Processing %s %#v", serialNum, cert.Subject.CommonName))
-			}
-
-			certObj := &Certificate{
-				Serial:    serialNum,
-				IssuerID:  issuerObj.IssuerID,
-				Subject:   cert.Subject.CommonName,
-				NotBefore: cert.NotBefore.UTC(),
-				NotAfter:  cert.NotAfter.UTC(),
-			}
-			err = txn.Insert(certObj)
-			if err != nil {
-				// Don't die on insertion errors; they're likely duplicates, which
-				// can happen, but we'll just ignore and make sure the names are valid.
-				log.Printf("DB error on cert: %#v: %s", certObj, err)
-			}
-
-			certId = certObj.CertID
+			return txn, 0, fmt.Errorf("DB error on cert insertion: %#v: %s", certObj, err)
 		}
 
-		if certId != 0 {
-			// certId obtained!
-			break
-		}
+		certId = certObj.CertID
 	}
 
 	if certId == 0 {
 		// Can't continue, so abort
-		return nil, 0, fmt.Errorf("Failed to obtain a certId for certificate %v", cert)
+		return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate %v", cert)
+	}
+
+	//
+	// Insert the raw certificate, if not already there
+	//
+	if edb.FullCerts {
+		rawCert, err := edb.DbMap.Get(&CertificateRaw{}, certId)
+		if err != nil {
+			log.Printf("DB error on raw certificate: %d: %s", certId, err)
+		}
+		if rawCert == nil {
+			rawCertObj := &CertificateRaw{
+				CertID: certId,
+				DER:    cert.Raw,
+			}
+			// Ignore errors on insert
+			_ = edb.DbMap.Insert(rawCertObj)
+		}
 	}
 
 	//
@@ -315,24 +320,6 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	err = edb.insertRegisteredDomains(txn, certId, names)
 	if err != nil {
 		log.Printf("DB error on certId %d registered domains: %#v: %s", certId, names, err)
-	}
-
-	//
-	// Insert the raw certificate, if not already there
-	//
-	if edb.FullCerts {
-		rawCert, err := txn.Get(&CertificateRaw{}, certId)
-		if err != nil {
-			log.Printf("DB error on raw certificate: %d: %s", certId, err)
-		}
-		if rawCert == nil {
-			rawCertObj := &CertificateRaw{
-				CertID: certId,
-				DER:    cert.Raw,
-			}
-			// Ignore errors on insert
-			_ = txn.Insert(rawCertObj)
-		}
 	}
 
 	return txn, certId, err
@@ -375,6 +362,7 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 
 	txn, certId, err := edb.insertCertificate(cert)
 	if err != nil {
+		txn.Rollback()
 		return err
 	}
 
@@ -425,37 +413,50 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 		return nil
 	}
 
-	txn, certId, err := edb.insertCertificate(cert)
-	if err != nil {
-		return err
+	backoff := &backoff.Backoff{
+		Jitter: true,
 	}
 
-	//
-	// Insert the appropriate CertificateLogEntry
-	//
-	var entryCount int
-
-	err = txn.SelectOne(&entryCount, "SELECT COUNT(1) FROM ctlogentry WHERE entryID = ? AND logID = ?", entry.Index, edb.LogId)
-	if err != nil {
-		txn.Rollback()
-		return fmt.Errorf("DB error finding existing log entries for CertID %v with LogID %v: %s", certId, edb.LogId, err)
-	}
-
-	if entryCount == 0 {
-		// Not found yet, so insert it.
-		certLogEntry := &CertificateLogEntry{
-			CertID:    certId,
-			LogID:     edb.LogId,
-			EntryID:   uint64(entry.Index),
-			EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
-		}
-		err = txn.Insert(certLogEntry)
+	for count := 0; count < 10; count++ {
+		txn, certId, err := edb.insertCertificate(cert)
 		if err != nil {
 			txn.Rollback()
-			return fmt.Errorf("DB error on cert log entry: %#v: %s", certLogEntry, err)
+			log.Printf("Insertion error (#%d): %s", err)
+			time.Sleep(backoff.Duration())
+			continue
 		}
-	}
 
-	err = txn.Commit()
+		//
+		// Insert the appropriate CertificateLogEntry
+		//
+		var entryCount int
+
+		err = txn.SelectOne(&entryCount, "SELECT COUNT(1) FROM ctlogentry WHERE entryID = ? AND logID = ?", entry.Index, edb.LogId)
+		if err != nil {
+			txn.Rollback()
+			log.Printf("DB error finding existing log entries for CertID %v with LogID %v: %s", certId, edb.LogId, err)
+			time.Sleep(backoff.Duration())
+			continue
+		}
+
+		if entryCount == 0 {
+			// Not found yet, so insert it.
+			certLogEntry := &CertificateLogEntry{
+				CertID:    certId,
+				LogID:     edb.LogId,
+				EntryID:   uint64(entry.Index),
+				EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
+			}
+			err = txn.Insert(certLogEntry)
+			if err != nil {
+				txn.Rollback()
+				log.Printf("DB error on cert log entry: %#v: %s", certLogEntry, err)
+				time.Sleep(backoff.Duration())
+				continue
+			}
+		}
+
+		return txn.Commit()
+	}
 	return err
 }
