@@ -32,7 +32,7 @@ var (
 	censysPath = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
 	dbConnect  = flag.String("dbConnect", "", "DB Connection String")
 	verbose    = flag.Bool("v", false, "verbose output")
-  fullCerts  = flag.Bool("fullCerts", false, "store full DER-encoded certificates in a certificateraw table")
+	fullCerts  = flag.Bool("fullCerts", false, "store full DER-encoded certificates in a certificateraw table")
 	offset     = flag.Uint64("offset", 0, "offset from the beginning")
 	offsetByte = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
 	limit      = flag.Uint64("limit", 0, "limit processing to this many entries")

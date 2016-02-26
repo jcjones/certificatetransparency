@@ -49,8 +49,8 @@ type RegisteredDomain struct {
 }
 
 type CertificateRaw struct {
-  CertID uint64 `db:"certID"` // Internal Cert Identifier
-  DER   []byte  `db:"der"`    // DER-encoded certificate
+	CertID uint64 `db:"certID"` // Internal Cert Identifier
+	DER    []byte `db:"der"`    // DER-encoded certificate
 }
 
 type CertificateLog struct {
@@ -78,7 +78,7 @@ type EntriesDatabase struct {
 	DbMap        *gorp.DbMap
 	LogId        int
 	Verbose      bool
-  FullCerts    bool
+	FullCerts    bool
 	IssuerFilter *string
 }
 
@@ -87,8 +87,8 @@ func (edb *EntriesDatabase) InitTables() error {
 		edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
 	}
 
-  certRawTable := edb.DbMap.AddTableWithName(CertificateRaw{}, "certificateraw")
-  certRawTable.SetKeys(true, "CertID")
+	certRawTable := edb.DbMap.AddTableWithName(CertificateRaw{}, "certificateraw")
+	certRawTable.SetKeys(true, "CertID")
 
 	domainTable := edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
 	domainTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
@@ -249,79 +249,91 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 	var certId uint64
 
-	err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerObj.IssuerID)
-	if err != nil {
-		//
-		// This is a new certificate, so we need to add it to the certificate DB
-		// as well as pull out its metadata
-		//
-
-		if edb.Verbose {
-			fmt.Println(fmt.Sprintf("Processing %s %#v", serialNum, cert.Subject.CommonName))
-		}
-
-		certObj := &Certificate{
-			Serial:    serialNum,
-			IssuerID:  issuerObj.IssuerID,
-			Subject:   cert.Subject.CommonName,
-			NotBefore: cert.NotBefore.UTC(),
-			NotAfter:  cert.NotAfter.UTC(),
-		}
-		err = txn.Insert(certObj)
+	for {
+		err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerObj.IssuerID)
 		if err != nil {
-      // Don't die on insertion errors; they're likely duplicates, which
-      // can happen, but we'll just ignore and make sure the names are valid.
-      log.Printf("DB error on cert: %#v: %s", certObj, err)
-		}
+			//
+			// This is a new certificate, so we need to add it to the certificate DB
+			// as well as pull out its metadata
+			//
 
-		certId = certObj.CertID
-
-		//
-		// Process the DNS Names in the Certificate
-		//
-
-		// De-dupe the CN and the SAN
-		names := make(map[string]struct{})
-		if cert.Subject.CommonName != "" {
-			names[cert.Subject.CommonName] = struct{}{}
-		}
-		for _, name := range cert.DNSNames {
-			names[name] = struct{}{}
-		}
-
-		// Loop and insert names into the DB
-		for name, _ := range names {
-			nameObj := &SubjectName{
-				Name:   name,
-				CertID: certId,
+			if edb.Verbose {
+				fmt.Println(fmt.Sprintf("Processing %s %#v", serialNum, cert.Subject.CommonName))
 			}
-			// Ignore errors on insert
-			_ = txn.Insert(nameObj)
+
+			certObj := &Certificate{
+				Serial:    serialNum,
+				IssuerID:  issuerObj.IssuerID,
+				Subject:   cert.Subject.CommonName,
+				NotBefore: cert.NotBefore.UTC(),
+				NotAfter:  cert.NotAfter.UTC(),
+			}
+			err = txn.Insert(certObj)
+			if err != nil {
+				// Don't die on insertion errors; they're likely duplicates, which
+				// can happen, but we'll just ignore and make sure the names are valid.
+				log.Printf("DB error on cert: %#v: %s", certObj, err)
+			}
+
+			certId = certObj.CertID
 		}
 
-		err = edb.insertRegisteredDomains(txn, certId, names)
-		if err != nil {
-      log.Printf("DB error on registered domains: %#v: %s", certObj, err)
+		if certId != 0 {
+			// certId obtained!
+			break
 		}
 	}
 
-  //
-  // Insert the raw certificate, if not already there
-  //
-  if edb.FullCerts {
-    rawCert, err := txn.Get(&CertificateRaw{}, certId)
-    if err != nil {
-      log.Printf("DB error on raw certificate: %d: %s", certId, err)
-    }
-    if rawCert == nil {
-      rawCertObj := &CertificateRaw{
-        CertID: certId,
-        DER: cert.Raw,
-      }
-      // Ignore errors on insert
-      _ = txn.Insert(rawCertObj)
-    }
-  }
+	if certId == 0 {
+		// Can't continue, so abort
+		return nil, 0, fmt.Errorf("Failed to obtain a certId for certificate %v", cert)
+	}
+
+	//
+	// Process the DNS Names in the Certificate
+	//
+
+	// De-dupe the CN and the SAN
+	names := make(map[string]struct{})
+	if cert.Subject.CommonName != "" {
+		names[cert.Subject.CommonName] = struct{}{}
+	}
+	for _, name := range cert.DNSNames {
+		names[name] = struct{}{}
+	}
+
+	// Loop and insert names into the DB
+	for name, _ := range names {
+		nameObj := &SubjectName{
+			Name:   name,
+			CertID: certId,
+		}
+		// Ignore errors on insert
+		_ = txn.Insert(nameObj)
+	}
+
+	err = edb.insertRegisteredDomains(txn, certId, names)
+	if err != nil {
+		log.Printf("DB error on certId %d registered domains: %#v: %s", certId, names, err)
+	}
+
+	//
+	// Insert the raw certificate, if not already there
+	//
+	if edb.FullCerts {
+		rawCert, err := txn.Get(&CertificateRaw{}, certId)
+		if err != nil {
+			log.Printf("DB error on raw certificate: %d: %s", certId, err)
+		}
+		if rawCert == nil {
+			rawCertObj := &CertificateRaw{
+				CertID: certId,
+				DER:    cert.Raw,
+			}
+			// Ignore errors on insert
+			_ = txn.Insert(rawCertObj)
+		}
+	}
 
 	return txn, certId, err
 }
