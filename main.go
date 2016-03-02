@@ -25,6 +25,7 @@ import (
 	"github.com/google/certificate-transparency/go/client"
 	"github.com/jcjones/ct-sql/censysdata"
 	"github.com/jcjones/ct-sql/sqldb"
+	"github.com/vharitonsky/iniflags"
 )
 
 var (
@@ -371,7 +372,7 @@ func reprocessNames(db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
 }
 
 func main() {
-	flag.Parse()
+	iniflags.Parse()
 	log.SetFlags(0)
 	log.SetPrefix("")
 	dbConnectStr, err := recombineURLForDB(*dbConnect)
