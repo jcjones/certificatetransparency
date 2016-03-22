@@ -99,6 +99,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	domainTable.SetUniqueTogether("CertID", "Domain")
 
 	censysEntryTable := edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
+	censysEntryTable.ColMap("CertID").SetUnique(true)
 	censysEntryTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
 
 	logTable := edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog")
