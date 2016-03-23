@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 )
@@ -27,7 +28,15 @@ type CensysEntry struct {
 	// parsed    ParsedCensysEntry
 }
 
-type Importer struct {
+type Importer interface {
+	SeekByte(byteOffset uint64) error
+	Size() (uint64, error)
+	SeekLine(lineOffset uint64) error
+	NextEntry() (*CensysEntry, error)
+	ByteOffset() uint64
+}
+
+type FileImporter struct {
 	currentLine uint64
 	byteCounter *ImporterByteCounter
 	decoder     *json.Decoder
@@ -43,28 +52,42 @@ func (ibc *ImporterByteCounter) Write(p []byte) (n int, err error) {
 	return 0, nil
 }
 
-func (imp *Importer) OpenFile(path string) error {
-	imp.currentLine = 0
+func OpenFile(path string) (*FileImporter, error) {
+	byteCounter := &ImporterByteCounter{}
 	fileHandle, err := os.Open(path)
-	imp.fileHandle = fileHandle
-	imp.byteCounter = &ImporterByteCounter{}
-	readerObj := io.TeeReader(imp.fileHandle, imp.byteCounter)
-	imp.decoder = json.NewDecoder(readerObj)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	readerObj := io.TeeReader(fileHandle, byteCounter)
+	importer := &FileImporter {
+		currentLine: 0,
+		byteCounter: byteCounter,
+		decoder: json.NewDecoder(readerObj),
+		fileHandle: fileHandle,
+	}
+	return importer, err
 }
 
-func (imp *Importer) Close() error {
+func (imp *FileImporter) Close() error {
 	return imp.fileHandle.Close()
 }
 
-func (imp *Importer) SeekByte(byteOffset uint64) error {
+func (imp *FileImporter) SeekByte(byteOffset uint64) error {
 	newOffset, err := imp.fileHandle.Seek(int64(byteOffset), 1)
 	log.Printf("Seeked forward %d bytes, now at %d", byteOffset, newOffset)
 	imp.byteCounter.CurrentOffset = uint64(newOffset)
 	return err
 }
 
-func (imp *Importer) SeekLine(lineOffset uint64) error {
+func (imp *FileImporter) Size() (uint64, error) {
+	info, err := imp.fileHandle.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return uint64(info.Size()), err
+}
+
+func (imp *FileImporter) SeekLine(lineOffset uint64) error {
 	for ; imp.currentLine < lineOffset; imp.currentLine++ {
 		obj, err := imp.NextEntry()
 
@@ -79,19 +102,121 @@ func (imp *Importer) SeekLine(lineOffset uint64) error {
 	return nil
 }
 
-func (imp *Importer) ByteOffset() uint64 {
+func (imp *FileImporter) ByteOffset() uint64 {
 	return imp.byteCounter.CurrentOffset
 }
 
-func (imp *Importer) Size() (uint64, error) {
-	info, err := imp.fileHandle.Stat()
-	if err != nil {
-		return 0, err
+func (imp *FileImporter) NextEntry() (*CensysEntry, error) {
+	if !imp.decoder.More() {
+		return nil, nil
 	}
-	return uint64(info.Size()), err
+
+	data := &CensysEntry{}
+	err := imp.decoder.Decode(&data)
+	if err != nil {
+		return nil, err
+	}
+
+	certBytes, err := base64.StdEncoding.DecodeString(data.Raw)
+	if err != nil {
+		return nil, err
+	}
+
+	data.CertBytes = certBytes
+	data.LineNumber = imp.currentLine
+	data.Offset = imp.ByteOffset()
+	data.Timestamp = &time.Time{}
+
+	if data.Validation_timestamp != nil {
+		timestamp, err := time.Parse("2006-01-02 15:04:05", *data.Validation_timestamp)
+		if err != nil {
+			return nil, err
+		}
+		data.Timestamp = &timestamp
+	}
+
+	return data, err
 }
 
-func (imp *Importer) NextEntry() (*CensysEntry, error) {
+type HttpImporter struct {
+	currentLine    uint64
+	startingOffset uint64
+	byteCounter    *ImporterByteCounter
+	decoder        *json.Decoder
+	url            string
+	resp           *http.Response
+}
+
+func OpenURL(url string) (*HttpImporter, error) {
+	importer := &HttpImporter {
+		currentLine: 0,
+		byteCounter: &ImporterByteCounter{},
+		url: url,
+		decoder: nil,
+		resp: nil,
+	}
+	return importer, nil
+}
+
+func (imp *HttpImporter) ByteOffset() uint64 {
+	return imp.byteCounter.CurrentOffset
+}
+
+func (imp *HttpImporter) SeekByte(byteOffset uint64) error {
+	if imp.resp != nil {
+		return fmt.Errorf("Cannot seek on a HTTP session that already started.")
+	}
+
+	imp.startingOffset = byteOffset
+	imp.byteCounter.CurrentOffset = byteOffset;
+
+	log.Printf("Set byte offset to %d", byteOffset)
+	return nil
+}
+
+func (imp *HttpImporter) Size() (uint64, error) {
+	if imp.resp != nil {
+		return uint64(imp.resp.ContentLength), nil
+	}
+	return 0, fmt.Errorf("Cannot get size of an HTTP session that has not started.")
+}
+
+func (imp *HttpImporter) SeekLine(lineOffset uint64) error {
+	for ; imp.currentLine < lineOffset; imp.currentLine++ {
+		obj, err := imp.NextEntry()
+
+		if err != nil {
+			return err
+		}
+		if obj == nil {
+			return fmt.Errorf("Unexpected EOF")
+		}
+	}
+	log.Printf("Skipped to line %d, offset %d", imp.currentLine, imp.byteCounter.CurrentOffset)
+	return nil
+}
+
+func (imp *HttpImporter) NextEntry() (*CensysEntry, error) {
+	if imp.resp == nil {
+		// Not yet connected, so let's lazily connect
+		req, err := http.NewRequest("GET", imp.url, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if imp.startingOffset > 0 {
+			req.Header.Add("Range", fmt.Sprintf("bytes=%d-", imp.startingOffset))
+		}
+
+		client := &http.Client{}
+		imp.resp, err = client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		imp.decoder = json.NewDecoder(io.TeeReader(imp.resp.Body, imp.byteCounter))
+	}
+
 	if !imp.decoder.More() {
 		return nil, nil
 	}

@@ -31,6 +31,7 @@ import (
 var (
 	logUrl     = flag.String("log", "", "URL of the CT Log")
 	censysPath = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
+	censysUrl  = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
 	dbConnect  = flag.String("dbConnect", "", "DB Connection String")
 	verbose    = flag.Bool("v", false, "verbose output")
 	fullCerts  = flag.Bool("fullCerts", false, "store full DER-encoded certificates in a certificateraw table")
@@ -282,7 +283,7 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 	return nil
 }
 
-func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
+func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
 	entryChan := make(chan censysdata.CensysEntry, 100)
 	defer close(entryChan)
 	statusChan := make(chan OperationStatus, 1)
@@ -296,10 +297,6 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
 	}
 
 	startOffset := *offsetByte
-	maxOffset, err := importer.Size()
-	if err != nil {
-		return err
-	}
 
 	//
 	// Fast forward
@@ -309,20 +306,22 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
 	}
 
 	if *offset > 0 {
-		err = importer.SeekLine(*offset)
+		err := importer.SeekLine(*offset)
 		if err != nil {
 			return err
 		}
 	}
 
 	if *offsetByte > 0 {
-		err = importer.SeekByte(*offsetByte)
+		err := importer.SeekByte(*offsetByte)
 		if err != nil {
 			return err
 		}
 	}
 
-	log.Printf("Starting import from offset=%d, line_limit=%d / size=%d.", importer.ByteOffset(), *limit, maxOffset)
+	var maxOffset uint64
+
+	log.Printf("Starting import from offset=%d, line_limit=%d", importer.ByteOffset(), *limit)
 
 	// We've already fast-forwarded, so start at 0.
 	for count := uint64(0); ; count++ {
@@ -334,6 +333,14 @@ func processImporter(importer *censysdata.Importer, db *sqldb.EntriesDatabase, w
 			return err
 		}
 		if count%128 == 0 {
+			// Lazily obtain the max offset
+			if maxOffset < 1 {
+				maxOffset, err = importer.Size()
+				if err != nil {
+					return err
+				}
+			}
+
 			statusChan <- OperationStatus{int64(startOffset), int64(ent.Offset), int64(maxOffset)}
 		}
 		entryChan <- *ent
@@ -390,16 +397,25 @@ func main() {
 		os.Exit(0)
 	}
 
-	if censysPath != nil && len(*censysPath) > 5 {
-		importer := &censysdata.Importer{}
-		err = importer.OpenFile(*censysPath)
+	var importer censysdata.Importer
+	if censysUrl != nil && len(*censysUrl) > 5 {
+		urlImporter, err := censysdata.OpenURL(*censysUrl)
+		if err != nil {
+			log.Fatalf("unable to open Censys URL: %s", err)
+		}
+		importer = urlImporter
+	} else if censysPath != nil && len(*censysPath) > 5 {
+		fileImporter, err := censysdata.OpenFile(*censysPath)
 		if err != nil {
 			log.Fatalf("unable to open Censys file: %s", err)
 		}
-		defer importer.Close()
+		importer = fileImporter
+		defer fileImporter.Close()
+	}
 
+	if importer != nil {
 		wg := new(sync.WaitGroup)
-		err := processImporter(importer, entriesDb, wg)
+		err = processImporter(importer, entriesDb, wg)
 
 		if err != nil {
 			log.Fatalf("error while running importer: %s", err)

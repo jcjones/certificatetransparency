@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-gorp/gorp"
@@ -82,6 +83,7 @@ type EntriesDatabase struct {
 	FullCerts    bool
 	IssuerFilter *string
 	KnownIssuers map[string]int
+	IssuersLock  sync.RWMutex
 }
 
 func (edb *EntriesDatabase) InitTables() error {
@@ -172,7 +174,9 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	//
 
 	authorityKeyId := base64.StdEncoding.EncodeToString(cert.AuthorityKeyId)
+	edb.IssuersLock.RLock()
 	issuerID, issuerIsInMap := edb.KnownIssuers[authorityKeyId]
+	edb.IssuersLock.RUnlock()
 
 	if !issuerIsInMap {
 		var issuerObj Issuer
@@ -200,7 +204,9 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 		}
 
 		// Cache for the future
+		edb.IssuersLock.Lock()
 		edb.KnownIssuers[authorityKeyId] = issuerObj.IssuerID
+		edb.IssuersLock.Unlock()
 		issuerID = issuerObj.IssuerID
 	}
 
