@@ -341,7 +341,6 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 
 	txn, certId, err := edb.insertCertificate(cert)
 	if err != nil {
-		txn.Rollback()
 		return err
 	}
 
@@ -352,10 +351,9 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 		CertID:    certId,
 		EntryTime: *entry.Timestamp,
 	}
-	err = txn.Insert(certEntry)
-	if err != nil {
-		return fmt.Errorf("Non-fatal DB error on censys entry: %#v: %s", certEntry, err)
-	}
+	// Ignore errors on insertion for Censys entry markers
+	_ = txn.Insert(certEntry)
+
 	err = txn.Commit()
 	return err
 }
