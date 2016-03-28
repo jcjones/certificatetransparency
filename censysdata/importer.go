@@ -34,6 +34,7 @@ type Importer interface {
 	SeekLine(lineOffset uint64) error
 	NextEntry() (*CensysEntry, error)
 	ByteOffset() uint64
+	String() string
 }
 
 type FileImporter struct {
@@ -70,6 +71,10 @@ func OpenFile(path string) (*FileImporter, error) {
 
 func (imp *FileImporter) Close() error {
 	return imp.fileHandle.Close()
+}
+
+func (imp *FileImporter) String() string {
+	return fmt.Sprintf("File Importer (File=%s)", imp.fileHandle.Name())
 }
 
 func (imp *FileImporter) SeekByte(byteOffset uint64) error {
@@ -156,6 +161,10 @@ func OpenURL(url string) (*HttpImporter, error) {
 		resp: nil,
 	}
 	return importer, nil
+}
+
+func (imp *HttpImporter) String() string {
+	return fmt.Sprintf("HTTP Importer (URL=%s)", imp.url)
 }
 
 func (imp *HttpImporter) ByteOffset() uint64 {

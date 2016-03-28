@@ -414,6 +414,8 @@ func main() {
 	}
 
 	if importer != nil {
+		log.Printf("Starting from importer %s, fullCerts=%b", importer.String(), *fullCerts)
+
 		wg := new(sync.WaitGroup)
 		err = processImporter(importer, entriesDb, wg)
 
