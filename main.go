@@ -25,6 +25,7 @@ import (
 	"github.com/google/certificate-transparency/go/client"
 	"github.com/jcjones/ct-sql/censysdata"
 	"github.com/jcjones/ct-sql/sqldb"
+	"github.com/jcjones/ct-sql/utils"
 	"github.com/vharitonsky/iniflags"
 )
 
@@ -134,7 +135,7 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
 		}
 
 		// Speed statistics
-		lastloopStart, lastloopCount, loopSpeed := &time.Time{}, int64(0), 0.0
+		progressMonitor := utils.NewProgressMonitor()
 
 		for {
 			select {
@@ -144,18 +145,14 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
 				}
 
 				// Track speed statistics
-				if !lastloopStart.IsZero() {
-					loopSpeed = float64(status.Current - lastloopCount) / (time.Now().Sub(*lastloopStart).Minutes())
-				}
-				*lastloopStart = time.Now()
-				lastloopCount = status.Current
-
+				progressMonitor.UpdateCount(status.Current)
+				progressMonitor.UpdateLength(status.Length)
 			case <-ticker.C:
 				symbolIndex = (symbolIndex + 1) % len(symbols)
 			}
 
 			// Display the line
-			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %.1f/minute", status.Percentage(), status.Current, status.Length, loopSpeed)
+			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %s", status.Percentage(), status.Current, status.Length, progressMonitor)
 
 			if isInteractive {
 				clearLine()
@@ -388,8 +385,8 @@ func main() {
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	entriesDb := &sqldb.EntriesDatabase{DbMap: dbMap,
-		              Verbose: *verbose, FullCerts: *fullCerts,
-		              KnownIssuers: make(map[string]int)}
+		Verbose: *verbose, FullCerts: *fullCerts,
+		KnownIssuers: make(map[string]int)}
 	err = entriesDb.InitTables()
 	if err != nil {
 		log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)

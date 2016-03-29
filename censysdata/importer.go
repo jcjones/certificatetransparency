@@ -60,11 +60,11 @@ func OpenFile(path string) (*FileImporter, error) {
 		return nil, err
 	}
 	readerObj := io.TeeReader(fileHandle, byteCounter)
-	importer := &FileImporter {
+	importer := &FileImporter{
 		currentLine: 0,
 		byteCounter: byteCounter,
-		decoder: json.NewDecoder(readerObj),
-		fileHandle: fileHandle,
+		decoder:     json.NewDecoder(readerObj),
+		fileHandle:  fileHandle,
 	}
 	return importer, err
 }
@@ -153,12 +153,12 @@ type HttpImporter struct {
 }
 
 func OpenURL(url string) (*HttpImporter, error) {
-	importer := &HttpImporter {
+	importer := &HttpImporter{
 		currentLine: 0,
 		byteCounter: &ImporterByteCounter{},
-		url: url,
-		decoder: nil,
-		resp: nil,
+		url:         url,
+		decoder:     nil,
+		resp:        nil,
 	}
 	return importer, nil
 }
@@ -177,7 +177,7 @@ func (imp *HttpImporter) SeekByte(byteOffset uint64) error {
 	}
 
 	imp.startingOffset = byteOffset
-	imp.byteCounter.CurrentOffset = byteOffset;
+	imp.byteCounter.CurrentOffset = byteOffset
 
 	log.Printf("Set byte offset to %d", byteOffset)
 	return nil
