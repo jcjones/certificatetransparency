@@ -133,21 +133,35 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
 			ticker.Stop()
 		}
 
+		// Speed statistics
+		lastloopStart, lastloopCount, loopSpeed := &time.Time{}, int64(0), 0.0
+
 		for {
 			select {
 			case status, ok = <-statusChan:
 				if !ok {
 					return
 				}
+
+				// Track speed statistics
+				if !lastloopStart.IsZero() {
+					loopSpeed = float64(status.Current - lastloopCount) / (time.Now().Sub(*lastloopStart).Minutes())
+				}
+				*lastloopStart = time.Now()
+				lastloopCount = status.Current
+
 			case <-ticker.C:
 				symbolIndex = (symbolIndex + 1) % len(symbols)
 			}
 
+			// Display the line
+			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %.1f/minute", status.Percentage(), status.Current, status.Length, loopSpeed)
+
 			if isInteractive {
 				clearLine()
-				fmt.Printf("%s %.1f%% (%d of %d)", symbols[symbolIndex], status.Percentage(), status.Current, status.Length)
+				fmt.Printf("%s %s", symbols[symbolIndex], statusLine)
 			} else {
-				fmt.Println(fmt.Printf("%.1f%% (%d of %d)", status.Percentage(), status.Current, status.Length))
+				fmt.Println(statusLine)
 			}
 		}
 	}()
@@ -389,6 +403,8 @@ func main() {
 
 		ctLog := client.New(*logUrl)
 
+		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, *fullCerts)
+
 		err = downloadLog(ctLogUrl, ctLog, entriesDb)
 		if err != nil {
 			log.Fatalf("error while updating CT entries: %s", err)
@@ -414,7 +430,7 @@ func main() {
 	}
 
 	if importer != nil {
-		log.Printf("Starting from importer %s, fullCerts=%b", importer.String(), *fullCerts)
+		log.Printf("Starting Censys Import, using %s, fullCerts=%t\n", importer.String(), *fullCerts)
 
 		wg := new(sync.WaitGroup)
 		err = processImporter(importer, entriesDb, wg)
