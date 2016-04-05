@@ -19,6 +19,7 @@ import (
 	"github.com/google/certificate-transparency/go"
 	"github.com/google/certificate-transparency/go/x509"
 	"github.com/jcjones/ct-sql/censysdata"
+	"github.com/jcjones/ct-sql/utils"
 	"github.com/jpillora/backoff"
 	"golang.org/x/net/publicsuffix"
 )
@@ -50,11 +51,6 @@ type RegisteredDomain struct {
 	Domain string `db:"domain"` // eTLD+first label
 }
 
-type CertificateRaw struct {
-	CertID uint64 `db:"certID"` // Internal Cert Identifier
-	DER    []byte `db:"der"`    // DER-encoded certificate
-}
-
 type CertificateLog struct {
 	LogID int    `db:"logId"` // Log Identifier (FK to CertificateLog)
 	URL   string `db:"url"`   // URL to the log
@@ -80,7 +76,7 @@ type EntriesDatabase struct {
 	DbMap        *gorp.DbMap
 	LogId        int
 	Verbose      bool
-	FullCerts    bool
+	FullCerts    *utils.FolderDatabase
 	IssuerFilter *string
 	KnownIssuers map[string]int
 	IssuersLock  sync.RWMutex
@@ -90,9 +86,6 @@ func (edb *EntriesDatabase) InitTables() error {
 	if edb.Verbose {
 		edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
 	}
-
-	certRawTable := edb.DbMap.AddTableWithName(CertificateRaw{}, "certificateraw")
-	certRawTable.SetKeys(true, "CertID")
 
 	domainTable := edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
 	domainTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
@@ -113,6 +106,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	certTable.AddIndex("SerialIdx", "Hash", []string{"Serial"})
 	certTable.AddIndex("notBeforeIdx", "Hash", []string{"NotBefore"})
 	certTable.AddIndex("notAfterIdx", "Hash", []string{"NotAfter"})
+	certTable.AddIndex("issuerIdx", "Hash", []string{"IssuerID"})
 	certTable.SetUniqueTogether("Serial", "IssuerID")
 
 	issuerTable := edb.DbMap.AddTableWithName(Issuer{}, "issuer")
@@ -258,18 +252,10 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	//
 	// Insert the raw certificate, if not already there
 	//
-	if edb.FullCerts {
-		rawCert, err := edb.DbMap.Get(&CertificateRaw{}, certId)
+	if edb.FullCerts != nil {
+		err := edb.FullCerts.Store(certId, cert.Raw)
 		if err != nil {
 			log.Printf("DB error on raw certificate: %d: %s", certId, err)
-		}
-		if rawCert == nil {
-			rawCertObj := &CertificateRaw{
-				CertID: certId,
-				DER:    cert.Raw,
-			}
-			// Ignore errors on insert
-			_ = edb.DbMap.Insert(rawCertObj)
 		}
 	}
 

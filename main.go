@@ -35,7 +35,7 @@ var (
 	censysUrl  = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
 	dbConnect  = flag.String("dbConnect", "", "DB Connection String")
 	verbose    = flag.Bool("v", false, "verbose output")
-	fullCerts  = flag.Bool("fullCerts", false, "store full DER-encoded certificates in a certificateraw table")
+	certPath   = flag.String("certPath", "", "Path under which to store full DER-encoded certificates")
 	offset     = flag.Uint64("offset", 0, "offset from the beginning")
 	offsetByte = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
 	limit      = flag.Uint64("limit", 0, "limit processing to this many entries")
@@ -382,10 +382,18 @@ func main() {
 		log.Fatalf("unable to ping SQL: %s: %s", dbConnectStr, err)
 	}
 
+	var certFolderDB *utils.FolderDatabase
+	if certPath != nil && len(*certPath) > 0 {
+		certFolderDB, err = utils.NewFolderDatabase(*certPath, 0444)
+		if err != nil {
+			log.Fatalf("unable to open Certificate Path: %s: %s", certPath, err)
+		}
+	}
+
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	entriesDb := &sqldb.EntriesDatabase{DbMap: dbMap,
-		Verbose: *verbose, FullCerts: *fullCerts,
+		Verbose: *verbose, FullCerts: certFolderDB,
 		KnownIssuers: make(map[string]int)}
 	err = entriesDb.InitTables()
 	if err != nil {
@@ -400,7 +408,7 @@ func main() {
 
 		ctLog := client.New(*logUrl)
 
-		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, *fullCerts)
+		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, (certFolderDB != nil))
 
 		err = downloadLog(ctLogUrl, ctLog, entriesDb)
 		if err != nil {
@@ -427,7 +435,7 @@ func main() {
 	}
 
 	if importer != nil {
-		log.Printf("Starting Censys Import, using %s, fullCerts=%t\n", importer.String(), *fullCerts)
+		log.Printf("Starting Censys Import, using %s, fullCerts=%t\n", importer.String(), (certFolderDB != nil))
 
 		wg := new(sync.WaitGroup)
 		err = processImporter(importer, entriesDb, wg)
