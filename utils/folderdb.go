@@ -7,12 +7,10 @@ import (
 	"path/filepath"
 )
 
-// How many certificates should be in each subfolder?
-var folderSize = uint64(1024)
-
 type FolderDatabase struct {
 	rootDir     *os.File
 	permissions os.FileMode
+	folderSize  uint64
 }
 
 func isDirectory(aPath string) bool {
@@ -24,7 +22,7 @@ func isDirectory(aPath string) bool {
 	return fileStat.IsDir()
 }
 
-func NewFolderDatabase(aPath string, aPerms os.FileMode) (*FolderDatabase, error) {
+func NewFolderDatabase(aPath string, aPerms os.FileMode, aFolderSize uint64) (*FolderDatabase, error) {
 	if !isDirectory(aPath) {
 		return nil, fmt.Errorf("%s is not a directory. Aborting.", aPath)
 	}
@@ -37,6 +35,7 @@ func NewFolderDatabase(aPath string, aPerms os.FileMode) (*FolderDatabase, error
 	db := &FolderDatabase{
 		rootDir:     fileObj,
 		permissions: aPerms,
+		folderSize: aFolderSize,
 	}
 
 	return db, nil
@@ -47,7 +46,7 @@ func idToString(aID uint64) string {
 }
 
 func (db *FolderDatabase) getPathForID(aID uint64) (string, string) {
-	subdirName := idToString(aID / folderSize)
+	subdirName := idToString(aID / db.folderSize)
 	dirPath := filepath.Join(db.rootDir.Name(), subdirName)
 	fileName := idToString(aID)
 	filePath := filepath.Join(dirPath, fileName)

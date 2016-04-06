@@ -30,15 +30,16 @@ import (
 )
 
 var (
-	logUrl     = flag.String("log", "", "URL of the CT Log")
-	censysPath = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
-	censysUrl  = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
-	dbConnect  = flag.String("dbConnect", "", "DB Connection String")
-	verbose    = flag.Bool("v", false, "verbose output")
-	certPath   = flag.String("certPath", "", "Path under which to store full DER-encoded certificates")
-	offset     = flag.Uint64("offset", 0, "offset from the beginning")
-	offsetByte = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
-	limit      = flag.Uint64("limit", 0, "limit processing to this many entries")
+	logUrl         = flag.String("log", "", "URL of the CT Log")
+	censysPath     = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
+	censysUrl      = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
+	dbConnect      = flag.String("dbConnect", "", "DB Connection String")
+	verbose        = flag.Bool("v", false, "verbose output")
+	certPath       = flag.String("certPath", "", "Path under which to store full DER-encoded certificates")
+	certsPerFolder = flag.Uint64("certsPerFolder", 16384, "Certificates per folder, when stored")
+	offset         = flag.Uint64("offset", 0, "offset from the beginning")
+	offsetByte     = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
+	limit          = flag.Uint64("limit", 0, "limit processing to this many entries")
 )
 
 // OperationStatus contains the current state of a large operation (i.e.
@@ -384,7 +385,7 @@ func main() {
 
 	var certFolderDB *utils.FolderDatabase
 	if certPath != nil && len(*certPath) > 0 {
-		certFolderDB, err = utils.NewFolderDatabase(*certPath, 0444)
+		certFolderDB, err = utils.NewFolderDatabase(*certPath, 0444, *certsPerFolder)
 		if err != nil {
 			log.Fatalf("unable to open Certificate Path: %s: %s", certPath, err)
 		}
