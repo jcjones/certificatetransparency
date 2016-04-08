@@ -4,7 +4,7 @@ It can be used with multiple CT logs by changing the `-log` flag.
 
 Quick Start:
 ```
-go get github.com/jcjones/ct-sql
+go get github.com/jcjones/ct-sql/cmd/ct-sql
 
 echo "dbConnect = mysql+tcp://root@localhost:3306/ctdb" > ./ct-sql.ini
 
