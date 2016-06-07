@@ -8,7 +8,6 @@ package main
 
 import (
 	"database/sql"
-	"flag"
 	"fmt"
 	"log"
 	"net/url"
@@ -26,20 +25,10 @@ import (
 	"github.com/jcjones/ct-sql/censysdata"
 	"github.com/jcjones/ct-sql/sqldb"
 	"github.com/jcjones/ct-sql/utils"
-	"github.com/vharitonsky/iniflags"
 )
 
 var (
-	logUrl         = flag.String("log", "", "URL of the CT Log")
-	censysPath     = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
-	censysUrl      = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
-	dbConnect      = flag.String("dbConnect", "", "DB Connection String")
-	verbose        = flag.Bool("v", false, "verbose output")
-	certPath       = flag.String("certPath", "", "Path under which to store full DER-encoded certificates")
-	certsPerFolder = flag.Uint64("certsPerFolder", 16384, "Certificates per folder, when stored")
-	offset         = flag.Uint64("offset", 0, "offset from the beginning")
-	offsetByte     = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
-	limit          = flag.Uint64("limit", 0, "limit processing to this many entries")
+	config = utils.NewCTConfig()
 )
 
 // OperationStatus contains the current state of a large operation (i.e.
@@ -61,52 +50,6 @@ func (status OperationStatus) Percentage() float32 {
 		return 100
 	}
 	return done * 100 / total
-}
-
-// Taken from Boulder
-func recombineURLForDB(dbConnect string) (string, error) {
-	dbConnect = strings.TrimSpace(dbConnect)
-	dbURL, err := url.Parse(dbConnect)
-	if err != nil {
-		return "", err
-	}
-
-	if dbURL.Scheme != "mysql+tcp" {
-		format := "given database connection string was not a mysql+tcp:// URL, was %#v"
-		return "", fmt.Errorf(format, dbURL.Scheme)
-	}
-
-	dsnVals, err := url.ParseQuery(dbURL.RawQuery)
-	if err != nil {
-		return "", err
-	}
-
-	dsnVals.Set("parseTime", "true")
-
-	// Required to make UPDATE return the number of rows matched,
-	// instead of the number of rows changed by the UPDATE.
-	dsnVals.Set("clientFoundRows", "true")
-
-	// Ensures that MySQL/MariaDB warnings are treated as errors. This
-	// avoids a number of nasty edge conditions we could wander
-	// into. Common things this discovers includes places where data
-	// being sent had a different type than what is in the schema,
-	// strings being truncated, writing null to a NOT NULL column, and
-	// so on. See
-	// <https://dev.mysql.com/doc/refman/5.0/en/sql-mode.html#sql-mode-strict>.
-	dsnVals.Set("strict", "true")
-
-	user := dbURL.User.Username()
-	passwd, hasPass := dbURL.User.Password()
-	dbConn := ""
-	if user != "" {
-		dbConn = url.QueryEscape(user)
-	}
-	if hasPass {
-		dbConn += ":" + passwd
-	}
-	dbConn += "@tcp(" + dbURL.Host + ")"
-	return dbConn + dbURL.EscapedPath() + "?" + dsnVals.Encode(), nil
 }
 
 func clearLine() {
@@ -171,7 +114,7 @@ func insertCTWorker(entries <-chan ct.LogEntry, db *sqldb.EntriesDatabase, wg *s
 	for ep := range entries {
 		err := db.InsertCTEntry(&ep)
 		if err != nil {
-			log.Printf("Problem inserting certificate: index: %d log: %s error: %s", ep.Index, *logUrl, err)
+			log.Printf("Problem inserting certificate: index: %d log: %s error: %s", ep.Index, *config.LogUrl, err)
 		}
 	}
 }
@@ -232,7 +175,7 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 }
 
 func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDatabase) error {
-	if *offsetByte > 0 {
+	if *config.OffsetByte > 0 {
 		return fmt.Errorf("Cannot set offsetByte for CT log downloads")
 	}
 
@@ -250,9 +193,9 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 
 	var origCount uint64
 	// Now we're OK to use the DB
-	if *offset > 0 {
-		log.Printf("Starting from offset %d", *offset)
-		origCount = *offset
+	if *config.Offset > 0 {
+		log.Printf("Starting from offset %d", *config.Offset)
+		origCount = *config.Offset
 	} else {
 		log.Printf("Counting existing entries... ")
 		origCount, err = db.Count()
@@ -269,8 +212,8 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 	}
 
 	endPos := sth.TreeSize
-	if *limit > 0 && endPos > origCount+*limit {
-		endPos = origCount + *limit
+	if *config.Limit > 0 && endPos > origCount+*config.Limit {
+		endPos = origCount + *config.Limit
 	}
 
 	fmt.Printf("Going from %d to %d\n", origCount, endPos)
@@ -308,24 +251,24 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 		go insertCensysWorker(entryChan, db, wg)
 	}
 
-	startOffset := *offsetByte
+	startOffset := *config.OffsetByte
 
 	//
 	// Fast forward
 	//
-	if *offset > 0 && *offsetByte > 0 {
+	if *config.Offset > 0 && *config.OffsetByte > 0 {
 		return fmt.Errorf("You may not set both offset and offsetByte")
 	}
 
-	if *offset > 0 {
-		err := importer.SeekLine(*offset)
+	if *config.Offset > 0 {
+		err := importer.SeekLine(*config.Offset)
 		if err != nil {
 			return err
 		}
 	}
 
-	if *offsetByte > 0 {
-		err := importer.SeekByte(*offsetByte)
+	if *config.OffsetByte > 0 {
+		err := importer.SeekByte(*config.OffsetByte)
 		if err != nil {
 			return err
 		}
@@ -333,11 +276,11 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 
 	var maxOffset uint64
 
-	log.Printf("Starting import from offset=%d, line_limit=%d", importer.ByteOffset(), *limit)
+	log.Printf("Starting import from offset=%d, line_limit=%d", importer.ByteOffset(), *config.Limit)
 
 	// We've already fast-forwarded, so start at 0.
 	for count := uint64(0); ; count++ {
-		if *limit > uint64(0) && count >= *limit {
+		if *config.Limit > uint64(0) && count >= *config.Limit {
 			return nil
 		}
 		ent, err := importer.NextEntry()
@@ -362,16 +305,15 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 }
 
 func main() {
-	iniflags.Parse()
 	log.SetFlags(0)
 	log.SetPrefix("")
-	dbConnectStr, err := recombineURLForDB(*dbConnect)
+	dbConnectStr, err := sqldb.RecombineURLForDB(*config.DbConnect)
 	if err != nil {
-		log.Printf("unable to parse %s: %s", *dbConnect, err)
+		log.Printf("unable to parse %s: %s", *config.DbConnect, err)
 	}
 
-	if len(dbConnectStr) == 0 || (censysPath == nil && logUrl == nil) {
-		flag.Usage()
+	if len(dbConnectStr) == 0 || (config.CensysPath == nil && config.LogUrl == nil) {
+		config.Usage()
 		os.Exit(2)
 	}
 
@@ -384,30 +326,30 @@ func main() {
 	}
 
 	var certFolderDB *utils.FolderDatabase
-	if certPath != nil && len(*certPath) > 0 {
-		certFolderDB, err = utils.NewFolderDatabase(*certPath, 0444, *certsPerFolder)
+	if config.CertPath != nil && len(*config.CertPath) > 0 {
+		certFolderDB, err = utils.NewFolderDatabase(*config.CertPath, 0444, *config.CertsPerFolder)
 		if err != nil {
-			log.Fatalf("unable to open Certificate Path: %s: %s", certPath, err)
+			log.Fatalf("unable to open Certificate Path: %s: %s", config.CertPath, err)
 		}
 	}
 
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	entriesDb := &sqldb.EntriesDatabase{DbMap: dbMap,
-		Verbose: *verbose, FullCerts: certFolderDB,
+		Verbose: *config.Verbose, FullCerts: certFolderDB,
 		KnownIssuers: make(map[string]int)}
 	err = entriesDb.InitTables()
 	if err != nil {
 		log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)
 	}
 
-	if logUrl != nil && len(*logUrl) > 5 {
-		ctLogUrl, err := url.Parse(*logUrl)
+	if config.LogUrl != nil && len(*config.LogUrl) > 5 {
+		ctLogUrl, err := url.Parse(*config.LogUrl)
 		if err != nil {
 			log.Fatalf("unable to set Certificate Log: %s", err)
 		}
 
-		ctLog := client.New(*logUrl)
+		ctLog := client.New(*config.LogUrl)
 
 		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, (certFolderDB != nil))
 
@@ -420,14 +362,14 @@ func main() {
 	}
 
 	var importer censysdata.Importer
-	if censysUrl != nil && len(*censysUrl) > 5 {
-		urlImporter, err := censysdata.OpenURL(*censysUrl)
+	if config.CensysUrl != nil && len(*config.CensysUrl) > 5 {
+		urlImporter, err := censysdata.OpenURL(*config.CensysUrl)
 		if err != nil {
 			log.Fatalf("unable to open Censys URL: %s", err)
 		}
 		importer = urlImporter
-	} else if censysPath != nil && len(*censysPath) > 5 {
-		fileImporter, err := censysdata.OpenFile(*censysPath)
+	} else if config.CensysPath != nil && len(*config.CensysPath) > 5 {
+		fileImporter, err := censysdata.OpenFile(*config.CensysPath)
 		if err != nil {
 			log.Fatalf("unable to open Censys file: %s", err)
 		}
@@ -450,6 +392,6 @@ func main() {
 	}
 
 	// Didn't include a mandatory action, so print usage and exit.
-	flag.Usage()
+	config.Usage()
 	os.Exit(2)
 }

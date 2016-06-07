@@ -35,7 +35,7 @@ func NewFolderDatabase(aPath string, aPerms os.FileMode, aFolderSize uint64) (*F
 	db := &FolderDatabase{
 		rootDir:     fileObj,
 		permissions: aPerms,
-		folderSize: aFolderSize,
+		folderSize:  aFolderSize,
 	}
 
 	return db, nil

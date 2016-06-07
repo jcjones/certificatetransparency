@@ -2,8 +2,30 @@ package utils
 
 import (
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"time"
 )
+
+type OperationStatus struct {
+	// Start contains the requested starting index of the operation.
+	Start int64
+	// Current contains the greatest index that has been processed.
+	Current int64
+	// Length contains the total number of entries.
+	Length int64
+}
+
+func (status OperationStatus) Percentage() float32 {
+	total := float32(status.Length - status.Start)
+	done := float32(status.Current - status.Start)
+
+	if total == 0 {
+		return 100
+	}
+	return done * 100 / total
+}
 
 type ProgressMonitor struct {
 	lastTime       time.Time
@@ -55,4 +77,78 @@ func (pm *ProgressMonitor) UpdateLength(newLength int64) error {
 
 func (pm *ProgressMonitor) getInstantRateMinute() float64 {
 	return pm.ticksPerMinute
+}
+
+func clearLine() {
+	fmt.Printf("\x1b[80D\x1b[2K")
+}
+
+type ProgressDisplay struct {
+	statusChan chan OperationStatus
+}
+
+func NewProgressDisplay() *ProgressDisplay {
+	return &ProgressDisplay{
+		statusChan: make(chan OperationStatus, 1),
+	}
+}
+
+func (pd *ProgressDisplay) UpdateProgress(start int64, index int64, upTo int64) {
+	pd.statusChan <- OperationStatus{start, index, upTo}
+}
+
+func (pd *ProgressDisplay) Close() {
+	close(pd.statusChan)
+}
+
+func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		symbols := []string{"|", "/", "-", "\\"}
+		symbolIndex := 0
+
+		status, ok := <-pd.statusChan
+		if !ok {
+			return
+		}
+
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+
+		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm") || strings.Contains(os.Getenv("TERM"), "screen")
+
+		if !isInteractive {
+			ticker.Stop()
+		}
+
+		// Speed statistics
+		progressMonitor := NewProgressMonitor()
+
+		for {
+			select {
+			case status, ok = <-pd.statusChan:
+				if !ok {
+					return
+				}
+
+				// Track speed statistics
+				progressMonitor.UpdateCount(status.Current)
+				progressMonitor.UpdateLength(status.Length)
+			case <-ticker.C:
+				symbolIndex = (symbolIndex + 1) % len(symbols)
+			}
+
+			// Display the line
+			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %s", status.Percentage(), status.Current, status.Length, progressMonitor)
+
+			if isInteractive {
+				clearLine()
+				fmt.Printf("%s %s", symbols[symbolIndex], statusLine)
+			} else {
+				fmt.Println(statusLine)
+			}
+		}
+	}()
 }

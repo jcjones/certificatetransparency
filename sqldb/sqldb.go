@@ -10,6 +10,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -40,6 +42,7 @@ type Issuer struct {
 }
 
 type SubjectName struct {
+	NameID uint64 `db:"nameID"` // Internal Name Identifier
 	CertID uint64 `db:"certID"` // Internal Cert Identifier
 	Name   string `db:"name"`   // identifier
 }
@@ -68,6 +71,15 @@ type CensysEntry struct {
 	EntryTime time.Time `db:"entryTime"` // Date when this certificate was imported from Censys.io
 }
 
+type ResolvedName struct {
+	NameID    uint64    `db:"nameID"`    // Internal Name Identifier (FK to Subject Name)
+	Time      time.Time `db:"time"`      // Date when this resolution was performed
+	Address   string    `db:"ipaddr"`    // IP address resolved at this name
+	City      string    `db:"city"`      // Geo: City name
+	Country   string    `db:"country"`   // Geo: Country ISO code
+	Continent string    `db:"continent"` // Geo: Continent name
+}
+
 func Uint64ToTimestamp(timestamp uint64) time.Time {
 	return time.Unix(int64(timestamp/1000), int64(timestamp%1000))
 }
@@ -82,10 +94,60 @@ type EntriesDatabase struct {
 	IssuersLock  sync.RWMutex
 }
 
+// Taken from Boulder
+func RecombineURLForDB(dbConnect string) (string, error) {
+	dbConnect = strings.TrimSpace(dbConnect)
+	dbURL, err := url.Parse(dbConnect)
+	if err != nil {
+		return "", err
+	}
+
+	if dbURL.Scheme != "mysql+tcp" {
+		format := "given database connection string was not a mysql+tcp:// URL, was %#v"
+		return "", fmt.Errorf(format, dbURL.Scheme)
+	}
+
+	dsnVals, err := url.ParseQuery(dbURL.RawQuery)
+	if err != nil {
+		return "", err
+	}
+
+	dsnVals.Set("parseTime", "true")
+
+	// Required to make UPDATE return the number of rows matched,
+	// instead of the number of rows changed by the UPDATE.
+	dsnVals.Set("clientFoundRows", "true")
+
+	// Ensures that MySQL/MariaDB warnings are treated as errors. This
+	// avoids a number of nasty edge conditions we could wander
+	// into. Common things this discovers includes places where data
+	// being sent had a different type than what is in the schema,
+	// strings being truncated, writing null to a NOT NULL column, and
+	// so on. See
+	// <https://dev.mysql.com/doc/refman/5.0/en/sql-mode.html#sql-mode-strict>.
+	dsnVals.Set("strict", "true")
+
+	user := dbURL.User.Username()
+	passwd, hasPass := dbURL.User.Password()
+	dbConn := ""
+	if user != "" {
+		dbConn = url.QueryEscape(user)
+	}
+	if hasPass {
+		dbConn += ":" + passwd
+	}
+	dbConn += "@tcp(" + dbURL.Host + ")"
+	return dbConn + dbURL.EscapedPath() + "?" + dsnVals.Encode(), nil
+}
+
 func (edb *EntriesDatabase) InitTables() error {
 	if edb.Verbose {
 		edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
 	}
+
+	resolvedTable := edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
+	resolvedTable.AddIndex("NameIDIdx", "BTree", []string{"NameID"})
+	resolvedTable.AddIndex("CountryIdx", "Hash", []string{"Country"})
 
 	domainTable := edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
 	domainTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
@@ -120,6 +182,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	logEntryTable.SetUniqueTogether("LogID", "EntryID")
 
 	nameTable := edb.DbMap.AddTableWithName(SubjectName{}, "name")
+	nameTable.SetKeys(true, "NameID")
 	nameTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
 	nameTable.AddIndex("NameIdx", "Hash", []string{"Name"})
 	nameTable.SetUniqueTogether("CertID", "Name")
@@ -395,4 +458,28 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 		return txn.Commit()
 	}
 	return err
+}
+
+func (edb *EntriesDatabase) InsertResolvedName(nameId uint64, addresses []net.IP, city string, country string, continent string) error {
+	txn, err := edb.DbMap.Begin()
+	if err != nil {
+		return err
+	}
+
+	for _, address := range addresses {
+		obj := &ResolvedName{
+			NameID:    nameId,
+			Time:      time.Now(),
+			Address:   address.String(),
+			City:      city,
+			Country:   country,
+			Continent: continent,
+		}
+		err = txn.Insert(obj)
+		if err != nil {
+			log.Printf("Non-fatal DB error on resolved name: %#v: %s", obj, err)
+		}
+	}
+
+	return txn.Commit()
 }
