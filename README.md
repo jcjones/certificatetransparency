@@ -9,7 +9,7 @@ go get github.com/jcjones/ct-sql/cmd/ct-sql
 
 echo "dbConnect = mysql+tcp://root@localhost:3306/ctdb" > ./ct-sql.ini
 
-for i in sqldb/migrations/*.sql; do mysql ctdb < $i; done
+for i in $GOPATH/src/github.com/jcjones/ct-sql/sqldb/migrations/*.sql; do mysql ctdb < $i; done
 
 ct-sql -config ./ct-sql.ini -log https://log.certly.io -limit 10000
 ct-sql -config ./ct-sql.ini -censysUrl https://url_to_censys/path/certificates.json
