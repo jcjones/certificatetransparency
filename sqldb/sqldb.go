@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -27,24 +26,24 @@ import (
 )
 
 type Certificate struct {
-	CertID    uint64    `db:"certID"`    // Internal Cert Identifier
-	Serial    string    `db:"serial"`    // The serial number of this cert
-	IssuerID  int       `db:"issuerID"`  // The Issuer of this cert
-	Subject   string    `db:"subject"`   // The Subject field of this cert
-	NotBefore time.Time `db:"notBefore"` // Date before which this cert should be considered invalid
-	NotAfter  time.Time `db:"notAfter"`  // Date after which this cert should be considered invalid
+	CertID    uint64    `db:"certID, primarykey, autoincrement"` // Internal Cert Identifier
+	Serial    string    `db:"serial"`                            // The serial number of this cert
+	IssuerID  int       `db:"issuerID"`                          // The Issuer of this cert
+	Subject   string    `db:"subject"`                           // The Subject field of this cert
+	NotBefore time.Time `db:"notBefore"`                         // Date before which this cert should be considered invalid
+	NotAfter  time.Time `db:"notAfter"`                          // Date after which this cert should be considered invalid
 }
 
 type Issuer struct {
-	IssuerID       int    `db:"issuerID"`       // Internal Issuer ID
-	CommonName     string `db:"commonName"`     // Issuer CN
-	AuthorityKeyId string `db:"authorityKeyId"` // Authority Key ID
+	IssuerID       int    `db:"issuerID, primarykey, autoincrement"` // Internal Issuer ID
+	CommonName     string `db:"commonName"`                          // Issuer CN
+	AuthorityKeyId string `db:"authorityKeyId"`                      // Authority Key ID
 }
 
 type SubjectName struct {
-	NameID uint64 `db:"nameID"` // Internal Name Identifier
-	CertID uint64 `db:"certID"` // Internal Cert Identifier
-	Name   string `db:"name"`   // identifier
+	NameID uint64 `db:"nameID, autoincrement"` // Internal Name Identifier
+	CertID uint64 `db:"certID"`                // Internal Cert Identifier
+	Name   string `db:"name"`                  // identifier
 }
 
 type RegisteredDomain struct {
@@ -55,8 +54,8 @@ type RegisteredDomain struct {
 }
 
 type CertificateLog struct {
-	LogID int    `db:"logId"` // Log Identifier (FK to CertificateLog)
-	URL   string `db:"url"`   // URL to the log
+	LogID int    `db:"logId, autoincrement"` // Log Identifier (FK to CertificateLog)
+	URL   string `db:"url"`                  // URL to the log
 }
 
 type CertificateLogEntry struct {
@@ -72,9 +71,14 @@ type CensysEntry struct {
 }
 
 type ResolvedName struct {
+	NameID  uint64    `db:"nameID"` // Internal Name Identifier (FK to Subject Name)
+	Time    time.Time `db:"time"`   // Date when this resolution was performed
+	Address string    `db:"ipaddr"` // IP address resolved at this name
+}
+
+type ResolvedPlace struct {
 	NameID    uint64    `db:"nameID"`    // Internal Name Identifier (FK to Subject Name)
 	Time      time.Time `db:"time"`      // Date when this resolution was performed
-	Address   string    `db:"ipaddr"`    // IP address resolved at this name
 	City      string    `db:"city"`      // Geo: City name
 	Country   string    `db:"country"`   // Geo: Country ISO code
 	Continent string    `db:"continent"` // Geo: Continent name
@@ -145,57 +149,15 @@ func (edb *EntriesDatabase) InitTables() error {
 		edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
 	}
 
-	resolvedTable := edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
-	resolvedTable.AddIndex("NameIDIdx", "BTree", []string{"NameID"})
-	resolvedTable.AddIndex("CountryIdx", "Hash", []string{"Country"})
-
-	domainTable := edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
-	domainTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
-	domainTable.AddIndex("DomainIdx", "Hash", []string{"Domain"})
-	domainTable.AddIndex("LabelIdx", "Hash", []string{"Label"})
-	domainTable.SetUniqueTogether("CertID", "Domain")
-
-	censysEntryTable := edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
-	censysEntryTable.ColMap("CertID").SetUnique(true)
-	censysEntryTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
-
-	logTable := edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog")
-	logTable.SetKeys(true, "LogID")
-	logTable.ColMap("URL").SetUnique(true)
-
-	certTable := edb.DbMap.AddTableWithName(Certificate{}, "certificate")
-	certTable.SetKeys(true, "CertID")
-	certTable.AddIndex("SerialIdx", "Hash", []string{"Serial"})
-	certTable.AddIndex("notBeforeIdx", "Hash", []string{"NotBefore"})
-	certTable.AddIndex("notAfterIdx", "Hash", []string{"NotAfter"})
-	certTable.AddIndex("issuerIdx", "Hash", []string{"IssuerID"})
-	certTable.SetUniqueTogether("Serial", "IssuerID")
-
-	issuerTable := edb.DbMap.AddTableWithName(Issuer{}, "issuer")
-	issuerTable.SetKeys(true, "IssuerID")
-	issuerTable.ColMap("AuthorityKeyId").SetUnique(true)
-	issuerTable.AddIndex("CNIdx", "Hash", []string{"CommonName"})
-	issuerTable.AddIndex("AKIIdx", "Hash", []string{"AuthorityKeyId"})
-
-	logEntryTable := edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
-	logEntryTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
-	logEntryTable.SetUniqueTogether("LogID", "EntryID")
-
-	nameTable := edb.DbMap.AddTableWithName(SubjectName{}, "name")
-	nameTable.SetKeys(true, "NameID")
-	nameTable.AddIndex("CertIDIdx", "BTree", []string{"CertID"})
-	nameTable.AddIndex("NameIdx", "Hash", []string{"Name"})
-	nameTable.SetUniqueTogether("CertID", "Name")
-
-	err := edb.DbMap.CreateTablesIfNotExists()
-	if err != nil && edb.Verbose {
-		fmt.Println(fmt.Sprintf("Note: could not create tables %s", err))
-	}
-
-	err = edb.DbMap.CreateIndex()
-	if err != nil && edb.Verbose {
-		fmt.Println(fmt.Sprintf("Note: could not create indicies %s", err))
-	}
+	edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
+	edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
+	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog")
+	edb.DbMap.AddTableWithName(Certificate{}, "certificate")
+	edb.DbMap.AddTableWithName(Issuer{}, "issuer")
+	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
+	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
+	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
+	edb.DbMap.AddTableWithName(SubjectName{}, "name")
 
 	// All is well, no matter what.
 	return nil
@@ -305,11 +267,16 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 		}
 
 		certId = certObj.CertID
+
+		if certId == 0 {
+			// Can't continue, so abort
+			return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate serial=%s obj=%+v", serialNum, certObj)
+		}
 	}
 
 	if certId == 0 {
-		// Can't continue, so abort
-		return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate %v", cert)
+		// CertID was not located
+		return txn, 0, fmt.Errorf("Failed to locate a certId for certificate serial=%s", serialNum)
 	}
 
 	//
@@ -460,26 +427,22 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 	return err
 }
 
-func (edb *EntriesDatabase) InsertResolvedName(nameId uint64, addresses []net.IP, city string, country string, continent string) error {
-	txn, err := edb.DbMap.Begin()
-	if err != nil {
-		return err
+func (edb *EntriesDatabase) InsertResolvedName(nameId uint64, address string) error {
+	obj := &ResolvedName{
+		NameID:  nameId,
+		Time:    time.Now(),
+		Address: address,
 	}
+	return edb.DbMap.Insert(obj)
+}
 
-	for _, address := range addresses {
-		obj := &ResolvedName{
-			NameID:    nameId,
-			Time:      time.Now(),
-			Address:   address.String(),
-			City:      city,
-			Country:   country,
-			Continent: continent,
-		}
-		err = txn.Insert(obj)
-		if err != nil {
-			log.Printf("Non-fatal DB error on resolved name: %#v: %s", obj, err)
-		}
+func (edb *EntriesDatabase) InsertResolvedPlace(nameId uint64, city string, country string, continent string) error {
+	obj := &ResolvedPlace{
+		NameID:    nameId,
+		Time:      time.Now(),
+		City:      city,
+		Country:   country,
+		Continent: continent,
 	}
-
-	return txn.Commit()
+	return edb.DbMap.Insert(obj)
 }

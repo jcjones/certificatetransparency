@@ -123,24 +123,30 @@ func (ns *NetScan) resolveWorker(entries <-chan ResolutionEntry) {
 			if *config.Verbose {
 				log.Printf("Could not lookup host %s: %s", e.Name, err)
 			}
+
+			// Insert a blank record so we know this one didn't work in the future
+			ns.db.InsertResolvedName(e.NameID, "")
+			// Can't proceed with the geo work since the IP didn't resolve
 			continue
 		}
 
+		// Log each resolved IP
+		for _, ip := range ips {
+			ns.db.InsertResolvedName(e.NameID, ip.String())
+		}
+
+		// Look up the geo-ip data for the first resolved IP
 		geoRecord, err := ns.geodb.City(ips[0])
 		if err != nil {
 			if *config.Verbose {
-				log.Printf("Could not lookup Geo IP %s: %s", e.Name, err)
+				log.Printf("Could not lookup geo-ip record for host %s: %s", e.Name, err)
 			}
 			continue
 		}
 
-		ns.db.InsertResolvedName(e.NameID, ips,
-			geoRecord.City.Names["en"], geoRecord.Country.IsoCode,
-			geoRecord.Continent.Names["en"])
-
-		if *config.Verbose {
-			log.Printf("Updating NameID:%d CertID:%d Name:%s from %s to %s", e.NameID, e.CertID, e.Name, e.Ipaddr, ips)
-		}
+		// Log the geo-ip data
+		ns.db.InsertResolvedPlace(e.NameID, geoRecord.City.Names["en"],
+			geoRecord.Country.IsoCode, geoRecord.Continent.Names["en"])
 	}
 }
 
