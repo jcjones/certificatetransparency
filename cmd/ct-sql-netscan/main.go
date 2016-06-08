@@ -23,7 +23,6 @@ import (
 
 type ResolutionEntry struct {
 	NameID uint64
-	CertID uint64
 	Name   string
 	Time   *time.Time
 	Ipaddr *string
@@ -84,10 +83,9 @@ func main() {
 
 	var entries []ResolutionEntry
 	_, err = dbMap.Select(&entries,
-		`SELECT n.nameID, n.certID, f.name, r.time, r.ipaddr FROM
-          cert_fqdn AS n
+		`SELECT f.nameID, f.name, r.time, r.ipaddr FROM
+          fqdn AS f
           NATURAL LEFT JOIN resolvedname AS r
-          NATURAL JOIN fqdn as f
       WHERE
           r.time < :oldestAllowed OR r.time IS NULL
       LIMIT :limit`,
