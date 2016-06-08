@@ -227,6 +227,11 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 		edb.KnownIssuers[authorityKeyId] = issuerObj.IssuerID
 		edb.IssuersLock.Unlock()
 		issuerID = issuerObj.IssuerID
+
+		if issuerID == 0 {
+			// Can't continue, so abort
+			return nil, 0, fmt.Errorf("Failed to obtain an issuerID for aki=%s", authorityKeyId)
+		}
 	}
 
 	//
@@ -357,6 +362,9 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 
 	txn, certId, err := edb.insertCertificate(cert)
 	if err != nil {
+		if txn != nil {
+			txn.Rollback()
+		}
 		return err
 	}
 
