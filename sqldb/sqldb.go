@@ -42,7 +42,7 @@ type Issuer struct {
 
 type FQDN struct {
 	NameID uint64 `db:"nameID, primarykey, autoincrement"` // Internal Name Identifier
-	Name   string `db:"name"`                  // identifier
+	Name   string `db:"name"`                              // identifier
 }
 
 type CertToFQDN struct {
@@ -52,19 +52,19 @@ type CertToFQDN struct {
 
 type CertToRegisteredDomain struct {
 	RegDomID uint64 `db:"regdomID"` // Internal Registerd Domain Identifier
-	CertID uint64 `db:"certID"` // Internal Cert Identifier
+	CertID   uint64 `db:"certID"`   // Internal Cert Identifier
 }
 
 type RegisteredDomain struct {
 	RegDomID uint64 `db:"regdomID"` // Internal Registerd Domain Identifier
-	ETLD   string `db:"etld"`   // effective top-level domain
-	Label  string `db:"label"`  // first label
-	Domain string `db:"domain"` // eTLD+first label
+	ETLD     string `db:"etld"`     // effective top-level domain
+	Label    string `db:"label"`    // first label
+	Domain   string `db:"domain"`   // eTLD+first label
 }
 
 type CertificateLog struct {
 	LogID int    `db:"logID, primarykey, autoincrement"` // Log Identifier (FK to CertificateLog)
-	URL   string `db:"url"`                  // URL to the log
+	URL   string `db:"url"`                              // URL to the log
 }
 
 type CertificateLogEntry struct {
@@ -168,7 +168,7 @@ func (edb *EntriesDatabase) InitTables() error {
 
 	edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
 	edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
-	edb.DbMap.AddTableWithName(CertToFQDN{}, "cert_fqdn");
+	edb.DbMap.AddTableWithName(CertToFQDN{}, "cert_fqdn")
 	edb.DbMap.AddTableWithName(CertToRegisteredDomain{}, "cert_registereddomain")
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
@@ -382,7 +382,6 @@ func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) 
 	return nameId, err
 }
 
-
 func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certId uint64, names map[string]struct{}) error {
 	domains := make(map[string]struct{})
 	for name, _ := range names {
@@ -419,7 +418,7 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 
 		certRegDomObj := &CertToRegisteredDomain{
 			RegDomID: regdomId,
-			CertID: certId,
+			CertID:   certId,
 		}
 		// Ignore errors on insert
 		err = txn.Insert(certRegDomObj)

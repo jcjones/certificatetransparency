@@ -223,7 +223,8 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 	wg := new(sync.WaitGroup)
 
 	displayProgress(statusChan, wg)
-	for i := 0; i < runtime.NumCPU(); i++ {
+	numWorkers := *config.NumThreads * runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
 		go insertCTWorker(entryChan, db, wg)
 	}
 	_, err = downloadCTRangeToChannel(ctLog, entryChan, statusChan, int64(origCount), int64(endPos))
@@ -247,7 +248,8 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 	defer wg.Done()
 
 	displayProgress(statusChan, wg)
-	for i := 0; i < runtime.NumCPU(); i++ {
+	numWorkers := *config.NumThreads * runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
 		go insertCensysWorker(entryChan, db, wg)
 	}
 

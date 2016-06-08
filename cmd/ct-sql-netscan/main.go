@@ -160,7 +160,8 @@ func (ns *NetScan) processEntries(entries []ResolutionEntry) error {
 
 	progressDisplay.StartDisplay(ns.wg)
 
-	for i := 0; i < runtime.NumCPU(); i++ {
+	numWorkers := *config.NumThreads * runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
 		go ns.resolveWorker(entryChan)
 	}
 
