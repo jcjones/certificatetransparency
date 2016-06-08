@@ -84,8 +84,10 @@ func main() {
 
 	var entries []ResolutionEntry
 	_, err = dbMap.Select(&entries,
-		`SELECT nameID, certID, name, time, ipaddr FROM
-          name AS n NATURAL LEFT JOIN resolvedname AS r
+		`SELECT n.nameID, n.certID, f.name, r.time, r.ipaddr FROM
+          cert_fqdn AS n
+          NATURAL LEFT JOIN resolvedname AS r
+          NATURAL JOIN fqdn as f
       WHERE
           r.time < :oldestAllowed OR r.time IS NULL
       LIMIT :limit`,

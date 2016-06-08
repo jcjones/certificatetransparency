@@ -40,10 +40,14 @@ type Issuer struct {
 	AuthorityKeyId string `db:"authorityKeyID"`                      // Authority Key ID
 }
 
-type SubjectName struct {
+type FQDN struct {
 	NameID uint64 `db:"nameID, primarykey, autoincrement"` // Internal Name Identifier
-	CertID uint64 `db:"certID"`                // Internal Cert Identifier
 	Name   string `db:"name"`                  // identifier
+}
+
+type CertToFQDN struct {
+	NameID uint64 `db:"nameID"` // Internal Name Identifier
+	CertID uint64 `db:"certID"` // Internal Cert Identifier
 }
 
 type RegisteredDomain struct {
@@ -159,14 +163,15 @@ func (edb *EntriesDatabase) InitTables() error {
 
 	edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
 	edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
+	edb.DbMap.AddTableWithName(CertToFQDN{}, "cert_fqdn");
 	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
 
 	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
 	edb.DbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(true, "CertID")
+	edb.DbMap.AddTableWithName(FQDN{}, "fqdn").SetKeys(true, "NameID")
 	edb.DbMap.AddTableWithName(Issuer{}, "issuer").SetKeys(true, "IssuerID")
-	edb.DbMap.AddTableWithName(SubjectName{}, "name").SetKeys(true, "NameID")
 
 	// All is well, no matter what.
 	return nil
@@ -318,12 +323,21 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 	// Loop and insert names into the DB
 	for name, _ := range names {
-		nameObj := &SubjectName{
-			Name:   name,
+		nameId, err := edb.getOrInsertName(txn, name)
+		if errorIsNotDuplicate(err) {
+			log.Printf("DB error on FQDN ID creation: %s: %s", name, err)
+			continue
+		}
+
+		certNameObj := &CertToFQDN{
 			CertID: certId,
+			NameID: nameId,
 		}
 		// Ignore errors on insert
-		_ = txn.Insert(nameObj)
+		err = txn.Insert(certNameObj)
+		if errorIsNotDuplicate(err) {
+			log.Printf("DB error on FQDN: %s: %s", name, err)
+		}
 	}
 
 	err = edb.insertRegisteredDomains(txn, certId, names)
@@ -333,6 +347,30 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 	return txn, certId, err
 }
+
+func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) (uint64, error) {
+	var nameId uint64
+	err := txn.SelectOne(&nameId, "SELECT nameID FROM fqdn WHERE name = ? LIMIT 1", fqdn)
+	if err != nil {
+		// Didn't exist, so let's insert it
+		fqdnObj := &FQDN{
+			Name: fqdn,
+		}
+		err = txn.Insert(fqdnObj)
+		if err != nil {
+			return 0, err
+		}
+
+		nameId = fqdnObj.NameID
+	}
+
+	if nameId == 0 {
+		err = fmt.Errorf("Failed to obtain NameID")
+	}
+
+	return nameId, err
+}
+
 
 func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certId uint64, names map[string]struct{}) error {
 	domains := make(map[string]struct{})
@@ -358,7 +396,10 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 			Label:  label,
 		}
 		// Ignore errors on insert
-		_ = txn.Insert(domainObj)
+		err := txn.Insert(domainObj)
+		if errorIsNotDuplicate(err) {
+			log.Printf("DB error on Registered Domain: %s: %s", domain, err)
+		}
 	}
 	return nil
 }

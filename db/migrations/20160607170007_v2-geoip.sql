@@ -36,6 +36,7 @@ CREATE TABLE `resolvedname` (
   `time` datetime DEFAULT NULL,
   `ipaddr` varchar(255) DEFAULT NULL,
   KEY `NameIDIdx` (`nameID`) USING BTREE,
+  UNIQUE KEY `name-ip` (`nameID`,`ipaddr`),
   CONSTRAINT `resolvedname-nameID` FOREIGN KEY (`nameID`) REFERENCES `name` (`nameID`) ON DELETE CASCADE ON UPDATE RESTRICT
 ) DEFAULT CHARSET=utf8;
 
@@ -45,6 +46,7 @@ CREATE TABLE `resolvedplace` (
   `city` varchar(255) DEFAULT NULL,
   `country` varchar(255) DEFAULT NULL,
   `continent` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`nameID`),
   KEY `NameIDIdx` (`nameID`) USING BTREE,
   KEY `CountryIdx` (`country`) USING HASH,
   CONSTRAINT `resolvedplace-nameID` FOREIGN KEY (`nameID`) REFERENCES `name` (`nameID`) ON DELETE CASCADE ON UPDATE RESTRICT
