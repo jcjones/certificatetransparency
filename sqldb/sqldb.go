@@ -50,8 +50,13 @@ type CertToFQDN struct {
 	CertID uint64 `db:"certID"` // Internal Cert Identifier
 }
 
-type RegisteredDomain struct {
+type CertToRegisteredDomain struct {
+	RegDomID uint64 `db:"regdomID"` // Internal Registerd Domain Identifier
 	CertID uint64 `db:"certID"` // Internal Cert Identifier
+}
+
+type RegisteredDomain struct {
+	RegDomID uint64 `db:"regdomID"` // Internal Registerd Domain Identifier
 	ETLD   string `db:"etld"`   // effective top-level domain
 	Label  string `db:"label"`  // first label
 	Domain string `db:"domain"` // eTLD+first label
@@ -164,10 +169,11 @@ func (edb *EntriesDatabase) InitTables() error {
 	edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
 	edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
 	edb.DbMap.AddTableWithName(CertToFQDN{}, "cert_fqdn");
-	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
+	edb.DbMap.AddTableWithName(CertToRegisteredDomain{}, "cert_registereddomain")
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
 
+	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain").SetKeys(true, "regdomID")
 	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
 	edb.DbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(true, "CertID")
 	edb.DbMap.AddTableWithName(FQDN{}, "fqdn").SetKeys(true, "NameID")
@@ -389,14 +395,29 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 	for domain, _ := range domains {
 		etld, _ := publicsuffix.PublicSuffix(domain)
 		label := strings.Replace(domain, "."+etld, "", 1)
-		domainObj := &RegisteredDomain{
+
+		var regdomId uint64
+		err := txn.SelectOne(&regdomId, "SELECT regdomID FROM registereddomain WHERE domain = ? LIMIT 1", domain)
+		if err != nil {
+			domainObj := &RegisteredDomain{
+				Domain: domain,
+				ETLD:   etld,
+				Label:  label,
+			}
+			// Ignore errors on insert
+			err := txn.Insert(domainObj)
+			if errorIsNotDuplicate(err) {
+				log.Printf("DB error on Registered Domain: %s: %s", domain, err)
+			}
+			regdomId = domainObj.RegDomID
+		}
+
+		certRegDomObj := &CertToRegisteredDomain{
+			RegDomID: regdomId,
 			CertID: certId,
-			Domain: domain,
-			ETLD:   etld,
-			Label:  label,
 		}
 		// Ignore errors on insert
-		err := txn.Insert(domainObj)
+		err = txn.Insert(certRegDomObj)
 		if errorIsNotDuplicate(err) {
 			log.Printf("DB error on Registered Domain: %s: %s", domain, err)
 		}
