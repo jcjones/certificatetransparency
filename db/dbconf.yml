@@ -1,0 +1,4 @@
+# what goose uses by default, even during migration creation
+development:
+  driver: mysql
+  open: root@tcp(localhost:3306)/ctdb?parseTime=true

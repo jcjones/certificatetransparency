@@ -1,11 +1,15 @@
-CREATE TABLE `censysentry` (
+-- Initial database configuration
+
+-- +goose Up
+-- SQL in section 'Up' is executed when this migration is applied
+CREATE TABLE IF NOT EXISTS `censysentry` (
   `certID` bigint(20) unsigned DEFAULT NULL,
   `entryTime` datetime DEFAULT NULL,
   UNIQUE KEY `certID` (`certID`),
   KEY `CertIDIdx` (`certID`) USING BTREE
 ) DEFAULT CHARSET=utf8;
 
-CREATE TABLE `certificate` (
+CREATE TABLE IF NOT EXISTS `certificate` (
   `certID` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `serial` varchar(255) DEFAULT NULL,
   `issuerID` int(11) DEFAULT NULL,
@@ -20,14 +24,14 @@ CREATE TABLE `certificate` (
   KEY `issuerIdx` (`issuerID`) USING HASH
 ) AUTO_INCREMENT=1 DEFAULT CHARSET=utf8;
 
-CREATE TABLE `ctlog` (
+CREATE TABLE IF NOT EXISTS `ctlog` (
   `logId` int(11) NOT NULL AUTO_INCREMENT,
   `url` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`logId`),
   UNIQUE KEY `url` (`url`)
 ) DEFAULT CHARSET=utf8;
 
-CREATE TABLE `ctlogentry` (
+CREATE TABLE IF NOT EXISTS `ctlogentry` (
   `certID` bigint(20) unsigned DEFAULT NULL,
   `logId` int(11) DEFAULT NULL,
   `entryId` bigint(20) unsigned DEFAULT NULL,
@@ -36,7 +40,7 @@ CREATE TABLE `ctlogentry` (
   KEY `CertIDIdx` (`certID`) USING BTREE
 ) DEFAULT CHARSET=utf8;
 
-CREATE TABLE `issuer` (
+CREATE TABLE IF NOT EXISTS `issuer` (
   `issuerID` int(11) NOT NULL AUTO_INCREMENT,
   `commonName` varchar(255) DEFAULT NULL,
   `authorityKeyId` varchar(255) DEFAULT NULL,
@@ -46,7 +50,7 @@ CREATE TABLE `issuer` (
   KEY `AKIIdx` (`authorityKeyId`) USING HASH
 ) DEFAULT CHARSET=utf8;
 
-CREATE TABLE `name` (
+CREATE TABLE IF NOT EXISTS `name` (
   `nameID` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `certID` bigint(20) unsigned DEFAULT NULL,
   `name` varchar(255) DEFAULT NULL,
@@ -56,7 +60,7 @@ CREATE TABLE `name` (
   KEY `NameIdx` (`name`) USING HASH
 ) DEFAULT CHARSET=utf8;
 
-CREATE TABLE `registereddomain` (
+CREATE TABLE IF NOT EXISTS `registereddomain` (
   `certID` bigint(20) unsigned DEFAULT NULL,
   `etld` varchar(255) DEFAULT NULL,
   `label` varchar(255) DEFAULT NULL,
@@ -66,3 +70,13 @@ CREATE TABLE `registereddomain` (
   KEY `DomainIdx` (`domain`) USING HASH,
   KEY `LabelIdx` (`label`) USING HASH
 ) DEFAULT CHARSET=utf8;
+
+-- +goose Down
+-- SQL section 'Down' is executed when this migration is rolled back
+DROP TABLE `registereddomain`;
+DROP TABLE `name`;
+DROP TABLE `issuer`;
+DROP TABLE `ctlogentry`;
+DROP TABLE `ctlog`;
+DROP TABLE `certificate`;
+DROP TABLE `censysentry`;

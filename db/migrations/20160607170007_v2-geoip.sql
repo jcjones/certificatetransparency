@@ -1,3 +1,8 @@
+-- Add foreign keys, and GeoIP tables
+
+-- +goose Up
+-- SQL in section 'Up' is executed when this migration is applied
+
 ALTER TABLE `ctdb`.`ctlogentry`
 ADD CONSTRAINT `logentry-certID`
   FOREIGN KEY (`certID`)
@@ -44,3 +49,13 @@ CREATE TABLE `resolvedplace` (
   KEY `CountryIdx` (`country`) USING HASH,
   CONSTRAINT `resolvedplace-nameID` FOREIGN KEY (`nameID`) REFERENCES `name` (`nameID`) ON DELETE CASCADE ON UPDATE RESTRICT
 ) DEFAULT CHARSET=utf8;
+
+-- +goose Down
+-- SQL section 'Down' is executed when this migration is rolled back
+DROP TABLE `resolvedname`;
+DROP TABLE `resolvedplace`;
+
+ALTER TABLE `ctdb`.`ctlogentry` DROP FOREIGN KEY `logentry-certID`;
+ALTER TABLE `ctdb`.`censysentry` DROP FOREIGN KEY `censysentry-certID`;
+ALTER TABLE `ctdb`.`name` DROP FOREIGN KEY `name-certID`;
+ALTER TABLE `ctdb`.`registereddomain` DROP FOREIGN KEY `registereddomain-certID`;
