@@ -25,29 +25,29 @@ CREATE TABLE IF NOT EXISTS `certificate` (
 ) AUTO_INCREMENT=1 DEFAULT CHARSET=utf8;
 
 CREATE TABLE IF NOT EXISTS `ctlog` (
-  `logId` int(11) NOT NULL AUTO_INCREMENT,
+  `logID` int(11) NOT NULL AUTO_INCREMENT,
   `url` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`logId`),
+  PRIMARY KEY (`logID`),
   UNIQUE KEY `url` (`url`)
 ) DEFAULT CHARSET=utf8;
 
 CREATE TABLE IF NOT EXISTS `ctlogentry` (
   `certID` bigint(20) unsigned DEFAULT NULL,
-  `logId` int(11) DEFAULT NULL,
-  `entryId` bigint(20) unsigned DEFAULT NULL,
+  `logID` int(11) DEFAULT NULL,
+  `entryID` bigint(20) unsigned DEFAULT NULL,
   `entryTime` datetime DEFAULT NULL,
-  UNIQUE KEY `logId` (`logId`,`entryId`),
+  UNIQUE KEY `logID` (`logID`,`entryID`),
   KEY `CertIDIdx` (`certID`) USING BTREE
 ) DEFAULT CHARSET=utf8;
 
 CREATE TABLE IF NOT EXISTS `issuer` (
   `issuerID` int(11) NOT NULL AUTO_INCREMENT,
   `commonName` varchar(255) DEFAULT NULL,
-  `authorityKeyId` varchar(255) DEFAULT NULL,
+  `authorityKeyID` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`issuerID`),
-  UNIQUE KEY `authorityKeyId` (`authorityKeyId`),
+  UNIQUE KEY `authorityKeyID` (`authorityKeyID`),
   KEY `CNIdx` (`commonName`) USING HASH,
-  KEY `AKIIdx` (`authorityKeyId`) USING HASH
+  KEY `AKIIdx` (`authorityKeyID`) USING HASH
 ) DEFAULT CHARSET=utf8;
 
 CREATE TABLE IF NOT EXISTS `name` (

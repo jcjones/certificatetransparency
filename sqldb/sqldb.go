@@ -37,11 +37,11 @@ type Certificate struct {
 type Issuer struct {
 	IssuerID       int    `db:"issuerID, primarykey, autoincrement"` // Internal Issuer ID
 	CommonName     string `db:"commonName"`                          // Issuer CN
-	AuthorityKeyId string `db:"authorityKeyId"`                      // Authority Key ID
+	AuthorityKeyId string `db:"authorityKeyID"`                      // Authority Key ID
 }
 
 type SubjectName struct {
-	NameID uint64 `db:"nameID, autoincrement"` // Internal Name Identifier
+	NameID uint64 `db:"nameID, primarykey, autoincrement"` // Internal Name Identifier
 	CertID uint64 `db:"certID"`                // Internal Cert Identifier
 	Name   string `db:"name"`                  // identifier
 }
@@ -54,13 +54,13 @@ type RegisteredDomain struct {
 }
 
 type CertificateLog struct {
-	LogID int    `db:"logId, autoincrement"` // Log Identifier (FK to CertificateLog)
+	LogID int    `db:"logID, primarykey, autoincrement"` // Log Identifier (FK to CertificateLog)
 	URL   string `db:"url"`                  // URL to the log
 }
 
 type CertificateLogEntry struct {
 	CertID    uint64    `db:"certID"`    // Internal Cert Identifier (FK to Certificate)
-	LogID     int       `db:"logId"`     // Log Identifier (FK to CertificateLog)
+	LogID     int       `db:"logID"`     // Log Identifier (FK to CertificateLog)
 	EntryID   uint64    `db:"entryId"`   // Entry Identifier within the log
 	EntryTime time.Time `db:"entryTime"` // Date when this certificate was added to the log
 }
@@ -86,6 +86,14 @@ type ResolvedPlace struct {
 
 func Uint64ToTimestamp(timestamp uint64) time.Time {
 	return time.Unix(int64(timestamp/1000), int64(timestamp%1000))
+}
+
+// Returns true if err is not nil, and is not a Duplicate entry error
+func errorIsNotDuplicate(err error) bool {
+	if err != nil {
+		return strings.Contains(err.Error(), "Duplicate entry") == false
+	}
+	return false
 }
 
 type EntriesDatabase struct {
@@ -151,20 +159,21 @@ func (edb *EntriesDatabase) InitTables() error {
 
 	edb.DbMap.AddTableWithName(CensysEntry{}, "censysentry")
 	edb.DbMap.AddTableWithName(CertificateLogEntry{}, "ctlogentry")
-	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog")
-	edb.DbMap.AddTableWithName(Certificate{}, "certificate")
-	edb.DbMap.AddTableWithName(Issuer{}, "issuer")
 	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain")
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
-	edb.DbMap.AddTableWithName(SubjectName{}, "name")
+
+	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
+	edb.DbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(true, "CertID")
+	edb.DbMap.AddTableWithName(Issuer{}, "issuer").SetKeys(true, "IssuerID")
+	edb.DbMap.AddTableWithName(SubjectName{}, "name").SetKeys(true, "NameID")
 
 	// All is well, no matter what.
 	return nil
 }
 
 func (edb *EntriesDatabase) Count() (count uint64, err error) {
-	err = edb.DbMap.SelectOne(&count, "SELECT CASE WHEN MAX(e.entryId) IS NULL THEN 0 ELSE MAX(e.entryId)+1 END FROM ctlogentry AS e WHERE e.logId = ?", edb.LogId)
+	err = edb.DbMap.SelectOne(&count, "SELECT CASE WHEN MAX(e.entryId) IS NULL THEN 0 ELSE MAX(e.entryId)+1 END FROM ctlogentry AS e WHERE e.logID = ?", edb.LogId)
 	return
 }
 
@@ -192,17 +201,17 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	// Also, this is lame. TODO: Be smarter with insertion mutexes
 	//
 
+	var issuerID int
 	authorityKeyId := base64.StdEncoding.EncodeToString(cert.AuthorityKeyId)
 	edb.IssuersLock.RLock()
 	issuerID, issuerIsInMap := edb.KnownIssuers[authorityKeyId]
 	edb.IssuersLock.RUnlock()
 
 	if !issuerIsInMap {
-		var issuerObj Issuer
 		// Select until we find it, as there may be contention.
 		for {
 			// Try to find a matching one first
-			err := edb.DbMap.SelectOne(&issuerObj, "SELECT * FROM issuer WHERE authorityKeyId = ?", authorityKeyId)
+			err := edb.DbMap.SelectOne(&issuerID, "SELECT issuerID FROM issuer WHERE authorityKeyID = ?", authorityKeyId)
 			if err != nil {
 				//
 				// This is a new issuer, so let's add it to the database
@@ -213,6 +222,7 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 				}
 				err = edb.DbMap.Insert(issuerObj)
 				if err == nil {
+					issuerID = issuerObj.IssuerID
 					// It worked! Proceed.
 					break
 				}
@@ -222,16 +232,15 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 			}
 		}
 
-		// Cache for the future
-		edb.IssuersLock.Lock()
-		edb.KnownIssuers[authorityKeyId] = issuerObj.IssuerID
-		edb.IssuersLock.Unlock()
-		issuerID = issuerObj.IssuerID
-
 		if issuerID == 0 {
 			// Can't continue, so abort
 			return nil, 0, fmt.Errorf("Failed to obtain an issuerID for aki=%s", authorityKeyId)
 		}
+
+		// Cache for the future
+		edb.IssuersLock.Lock()
+		edb.KnownIssuers[authorityKeyId] = issuerID
+		edb.IssuersLock.Unlock()
 	}
 
 	//
@@ -369,14 +378,17 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 	}
 
 	//
-	// Insert the appropriate CertificateLogEntry
+	// Insert the appropriate CensysEntry
 	//
 	certEntry := &CensysEntry{
 		CertID:    certId,
 		EntryTime: *entry.Timestamp,
 	}
 	// Ignore errors on insertion for Censys entry markers
-	_ = txn.Insert(certEntry)
+	err = txn.Insert(certEntry)
+	if errorIsNotDuplicate(err) {
+		return err
+	}
 
 	err = txn.Commit()
 	return err
@@ -428,7 +440,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 			EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
 		}
 		err = txn.Insert(certLogEntry)
-		if err != nil {
+		if errorIsNotDuplicate(err) {
 			log.Printf("Non-fatal DB error on cert log entry: %#v: %s", certLogEntry, err)
 		}
 
