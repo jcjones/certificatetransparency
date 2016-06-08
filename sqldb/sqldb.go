@@ -220,6 +220,11 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 	if !issuerIsInMap {
 		// Select until we find it, as there may be contention.
+
+		backoff := &backoff.Backoff{
+			Jitter: true,
+		}
+
 		for {
 			// Try to find a matching one first
 			err := edb.DbMap.SelectOne(&issuerID, "SELECT issuerID FROM issuer WHERE authorityKeyID = ?", authorityKeyId)
@@ -238,6 +243,7 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 					break
 				}
 				log.Printf("Collision on issuer %v, retrying", issuerObj)
+				time.Sleep(backoff.Duration())
 			} else {
 				break
 			}
@@ -310,7 +316,7 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	if edb.FullCerts != nil {
 		err := edb.FullCerts.Store(certId, cert.Raw)
 		if err != nil {
-			log.Printf("DB error on raw certificate: %d: %s", certId, err)
+			return txn, certId, fmt.Errorf("DB error on raw certificate: %d: %s", certId, err)
 		}
 	}
 
@@ -331,27 +337,26 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	for name, _ := range names {
 		nameId, err := edb.getOrInsertName(txn, name)
 		if errorIsNotDuplicate(err) {
-			log.Printf("DB error on FQDN ID creation: %s: %s", name, err)
-			continue
+			return txn, certId, fmt.Errorf("DB error on FQDN ID creation: %s: %s", name, err)
 		}
 
 		certNameObj := &CertToFQDN{
 			CertID: certId,
 			NameID: nameId,
 		}
-		// Ignore errors on insert
+
 		err = txn.Insert(certNameObj)
 		if errorIsNotDuplicate(err) {
-			log.Printf("DB error on FQDN: %s: %s", name, err)
+			return txn, certId, fmt.Errorf("DB error on FQDN: %s: %s", name, err)
 		}
 	}
 
 	err = edb.insertRegisteredDomains(txn, certId, names)
 	if err != nil {
-		log.Printf("DB error on certId %d registered domains: %#v: %s", certId, names, err)
+		return txn, certId, fmt.Errorf("DB error on certId %d registered domains: %#v: %s", certId, names, err)
 	}
 
-	return txn, certId, err
+	return txn, certId, nil
 }
 
 func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) (uint64, error) {
@@ -407,7 +412,7 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 			// Ignore errors on insert
 			err := txn.Insert(domainObj)
 			if errorIsNotDuplicate(err) {
-				log.Printf("DB error on Registered Domain: %s: %s", domain, err)
+				return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
 			}
 			regdomId = domainObj.RegDomID
 		}
@@ -419,7 +424,7 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 		// Ignore errors on insert
 		err = txn.Insert(certRegDomObj)
 		if errorIsNotDuplicate(err) {
-			log.Printf("DB error on Registered Domain: %s: %s", domain, err)
+			return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
 		}
 	}
 	return nil
@@ -452,8 +457,7 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 		return err
 	}
 
-	err = txn.Commit()
-	return err
+	return txn.Commit()
 }
 
 func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
@@ -486,7 +490,6 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 			if txn != nil {
 				txn.Rollback()
 			}
-			log.Printf("Insertion error (#%d): %s", err)
 			time.Sleep(backoff.Duration())
 			continue
 		}
@@ -503,12 +506,14 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 		}
 		err = txn.Insert(certLogEntry)
 		if errorIsNotDuplicate(err) {
-			log.Printf("Non-fatal DB error on cert log entry: %#v: %s", certLogEntry, err)
+			txn.Rollback()
+			continue
 		}
 
 		return txn.Commit()
 	}
-	return err
+
+	return fmt.Errorf("Insertion failure: %s", err)
 }
 
 func (edb *EntriesDatabase) InsertResolvedName(nameId uint64, address string) error {

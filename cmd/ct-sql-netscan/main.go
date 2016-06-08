@@ -168,7 +168,7 @@ func (ns *NetScan) processEntries(entries []ResolutionEntry) error {
 
 	for i, entry := range entries {
 		entryChan <- entry
-		if i%16 == 0 {
+		if i%256 == 0 {
 			progressDisplay.UpdateProgress(0, int64(i), int64(len(entries)))
 		}
 	}
