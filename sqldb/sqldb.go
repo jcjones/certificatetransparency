@@ -409,7 +409,9 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 	for count := 0; count < 10; count++ {
 		txn, certId, err := edb.insertCertificate(cert)
 		if err != nil {
-			txn.Rollback()
+			if txn != nil {
+				txn.Rollback()
+			}
 			log.Printf("Insertion error (#%d): %s", err)
 			time.Sleep(backoff.Duration())
 			continue
