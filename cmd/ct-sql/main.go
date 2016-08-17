@@ -351,7 +351,7 @@ func main() {
 			log.Fatalf("unable to set Certificate Log: %s", err)
 		}
 
-		ctLog := client.New(*config.LogUrl)
+		ctLog := client.New(*config.LogUrl, nil)
 
 		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, (certFolderDB != nil))
 
