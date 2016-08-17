@@ -512,7 +512,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 		return txn.Commit()
 	}
 
-	return fmt.Errorf("Insertion failure: %s", err)
+	return err
 }
 
 func (edb *EntriesDatabase) InsertResolvedName(nameId uint64, address string) error {
