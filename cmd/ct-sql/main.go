@@ -377,6 +377,13 @@ func main() {
 		}
 		importer = fileImporter
 		defer fileImporter.Close()
+	} else if *config.CensysStdin {
+		stdinImporter, err := censysdata.OpenFileHandle(os.Stdin)
+		if err != nil {
+			log.Fatalf("unable to open stdin: %s", err)
+		}
+		importer = stdinImporter
+		defer stdinImporter.Close()
 	}
 
 	if importer != nil {

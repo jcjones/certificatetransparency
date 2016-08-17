@@ -13,6 +13,7 @@ type CTConfig struct {
 	LogUrl         *string
 	CensysPath     *string
 	CensysUrl      *string
+	CensysStdin    *bool
 	DbConnect      *string
 	Verbose        *bool
 	CertPath       *string
@@ -29,6 +30,7 @@ func NewCTConfig() *CTConfig {
 		LogUrl:         flag.String("log", "", "URL of the CT Log"),
 		CensysPath:     flag.String("censysJson", "", "Path to a Censys.io certificate json dump"),
 		CensysUrl:      flag.String("censysUrl", "", "URL to a Censys.io certificate json dump"),
+		CensysStdin:    flag.Bool("censysStdin", false, "Read a Censys.io json dump from stdin"),
 		DbConnect:      flag.String("dbConnect", "", "DB Connection String"),
 		Verbose:        flag.Bool("v", false, "verbose output"),
 		CertPath:       flag.String("certPath", "", "Path under which to store full DER-encoded certificates"),

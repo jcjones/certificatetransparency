@@ -53,12 +53,8 @@ func (ibc *ImporterByteCounter) Write(p []byte) (n int, err error) {
 	return 0, nil
 }
 
-func OpenFile(path string) (*FileImporter, error) {
+func OpenFileHandle(fileHandle *os.File) (*FileImporter, error) {
 	byteCounter := &ImporterByteCounter{}
-	fileHandle, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
 	readerObj := io.TeeReader(fileHandle, byteCounter)
 	importer := &FileImporter{
 		currentLine: 0,
@@ -66,7 +62,15 @@ func OpenFile(path string) (*FileImporter, error) {
 		decoder:     json.NewDecoder(readerObj),
 		fileHandle:  fileHandle,
 	}
-	return importer, err
+	return importer, nil
+}
+
+func OpenFile(path string) (*FileImporter, error) {
+	fileHandle, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return OpenFileHandle(fileHandle)
 }
 
 func (imp *FileImporter) Close() error {
