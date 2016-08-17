@@ -437,6 +437,9 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 
 	txn, certId, err := edb.insertCertificate(cert)
 	if err != nil {
+		if edb.Verbose {
+			fmt.Printf("Error inserting cert, %s\n", err)
+		}
 		if txn != nil {
 			txn.Rollback()
 		}
@@ -486,6 +489,9 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 	for count := 0; count < 10; count++ {
 		txn, certId, err := edb.insertCertificate(cert)
 		if err != nil {
+			if edb.Verbose {
+				fmt.Printf("Error inserting cert, retrying (%d/10) %s\n", count, err)
+			}
 			if txn != nil {
 				txn.Rollback()
 			}
