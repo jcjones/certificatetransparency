@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,6 +119,12 @@ func (ns *NetScan) resolveWorker(entries <-chan ResolutionEntry) {
 	ns.wg.Add(1)
 	defer ns.wg.Done()
 	for e := range entries {
+		if strings.Contains(e.Name, "*") {
+			// Is a wildcard, we can't resolve it.
+			ns.db.InsertResolvedName(e.NameID, "")
+			continue
+		}
+
 		ips, err := net.LookupIP(e.Name)
 		if err != nil {
 			if *config.Verbose {
