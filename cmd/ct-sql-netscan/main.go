@@ -84,12 +84,9 @@ func main() {
 
 	var entries []ResolutionEntry
 	_, err = dbMap.Select(&entries,
-		`SELECT f.nameID, f.name, r.time, r.ipaddr FROM
-          fqdn AS f
-          NATURAL LEFT JOIN resolvedname AS r
-      WHERE
-          r.time < :oldestAllowed OR r.time IS NULL
-      LIMIT :limit`,
+		`SELECT q.nameID, f.name FROM netscanqueue AS q
+        NATURAL JOIN fqdn AS f
+        LIMIT :limit`,
 		map[string]interface{}{
 			"oldestAllowed": oldestAllowed,
 			"limit":         *config.Limit,
@@ -119,6 +116,13 @@ func (ns *NetScan) resolveWorker(entries <-chan ResolutionEntry) {
 	ns.wg.Add(1)
 	defer ns.wg.Done()
 	for e := range entries {
+		// Unqueue the nameID
+		err := ns.db.UnqueueFromNetscan(e.NameID)
+		if err != nil {
+			log.Printf("Could not dequeue host %s (ID=%d): %s", e.Name, e.NameID, err)
+			continue
+		}
+
 		if strings.Contains(e.Name, "*") {
 			// Is a wildcard, we can't resolve it.
 			ns.db.InsertResolvedName(e.NameID, "")

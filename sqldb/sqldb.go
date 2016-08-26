@@ -93,6 +93,11 @@ type ResolvedPlace struct {
 	Continent string    `db:"continent"` // Geo: Continent name
 }
 
+type NetscanQueue struct {
+	NameID    uint64    `db:"nameID, primarykey"` // Internal Name Identifier (FK to Subject Name)
+	TimeAdded time.Time `db:"time"`   // Date when this resolution was performed
+}
+
 func Uint64ToTimestamp(timestamp uint64) time.Time {
 	return time.Unix(int64(timestamp/1000), int64(timestamp%1000))
 }
@@ -172,6 +177,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	edb.DbMap.AddTableWithName(CertToRegisteredDomain{}, "cert_registereddomain")
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
+	edb.DbMap.AddTableWithName(NetscanQueue{}, "netscanqueue")
 
 	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain").SetKeys(true, "regdomID")
 	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
@@ -373,6 +379,16 @@ func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) 
 		}
 
 		nameId = fqdnObj.NameID
+
+		// Add to netscan queue
+		queueObj := &NetscanQueue{
+			NameID: nameId,
+			TimeAdded: time.Now(),
+		}
+		err = txn.Insert(queueObj)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if nameId == 0 {
@@ -539,4 +555,12 @@ func (edb *EntriesDatabase) InsertResolvedPlace(nameId uint64, city string, coun
 		Continent: continent,
 	}
 	return edb.DbMap.Insert(obj)
+}
+
+func (edb *EntriesDatabase) UnqueueFromNetscan(nameId uint64) error {
+	obj := &NetscanQueue{
+		NameID:    nameId,
+	}
+	_, err := edb.DbMap.Delete(obj)
+	return err
 }
