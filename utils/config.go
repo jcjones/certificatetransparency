@@ -23,6 +23,7 @@ type CTConfig struct {
 	Limit          *uint64
 	GeoipDbPath    *string
 	NumThreads     *int
+	HistoricalDays *int
 }
 
 func NewCTConfig() *CTConfig {
@@ -39,7 +40,8 @@ func NewCTConfig() *CTConfig {
 		OffsetByte:     flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset"),
 		Limit:          flag.Uint64("limit", 0, "limit processing to this many entries"),
 		GeoipDbPath:    flag.String("geoipDbPath", "", "Path to GeoIP2-City.mmdb"),
-		NumThreads:     flag.Int("numthreads", 1, "Use this many threads per CPU"),
+		NumThreads:     flag.Int("numThreads", 1, "Use this many threads per CPU"),
+		HistoricalDays: flag.Int("histDays", 90, "Update this many days of historical data"),
 	}
 
 	iniflags.Parse()

@@ -95,7 +95,14 @@ type ResolvedPlace struct {
 
 type NetscanQueue struct {
 	NameID    uint64    `db:"nameID, primarykey"` // Internal Name Identifier (FK to Subject Name)
-	TimeAdded time.Time `db:"time"`   // Date when this resolution was performed
+	TimeAdded time.Time `db:"time"`               // Date when this resolution was performed
+}
+
+type FirefoxPageloadIsTLS struct {
+	Date           time.Time `db:"date, primarykey"` // Date when this resolution was performed
+	CountTLS       int       `db:"countTLS"`         // Number of TLS pageloads
+	CountPageloads int       `db:"countPageloads"`   // Number of total pageloads
+	TimeAdded      time.Time `db:"timeAdded"`        // Date when this resolution was performed
 }
 
 func Uint64ToTimestamp(timestamp uint64) time.Time {
@@ -184,6 +191,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	edb.DbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(true, "CertID")
 	edb.DbMap.AddTableWithName(FQDN{}, "fqdn").SetKeys(true, "NameID")
 	edb.DbMap.AddTableWithName(Issuer{}, "issuer").SetKeys(true, "IssuerID")
+	edb.DbMap.AddTableWithName(FirefoxPageloadIsTLS{}, "firefoxpageloadstls")
 
 	// All is well, no matter what.
 	return nil
@@ -382,7 +390,7 @@ func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) 
 
 		// Add to netscan queue
 		queueObj := &NetscanQueue{
-			NameID: nameId,
+			NameID:    nameId,
 			TimeAdded: time.Now(),
 		}
 		err = txn.Insert(queueObj)
@@ -559,8 +567,25 @@ func (edb *EntriesDatabase) InsertResolvedPlace(nameId uint64, city string, coun
 
 func (edb *EntriesDatabase) UnqueueFromNetscan(nameId uint64) error {
 	obj := &NetscanQueue{
-		NameID:    nameId,
+		NameID: nameId,
 	}
 	_, err := edb.DbMap.Delete(obj)
 	return err
+}
+
+func (edb *EntriesDatabase) InsertOrUpdatePageloadIsTLS(datestamp time.Time, isTLS int, count int) error {
+	obj := &FirefoxPageloadIsTLS{
+		Date:           datestamp,
+		TimeAdded:      time.Now(),
+		CountTLS:       isTLS,
+		CountPageloads: count,
+	}
+	recordsUpdated, err := edb.DbMap.Update(obj)
+	if err != nil {
+		return err
+	}
+	if recordsUpdated == 0 {
+		return edb.DbMap.Insert(obj)
+	}
+	return nil
 }
