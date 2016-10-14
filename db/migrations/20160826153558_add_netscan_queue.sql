@@ -13,6 +13,9 @@ INSERT INTO netscanqueue
     NATURAL LEFT JOIN resolvedname AS r
     WHERE r.time IS NULL;
 
+-- Recommended:
+-- GRANT DELETE ON ctdb.`netscanqueue` to 'ctsql'@'localhost';
+
 -- +goose Down
 -- SQL section 'Down' is executed when this migration is rolled back
 
