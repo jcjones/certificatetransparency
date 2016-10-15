@@ -98,7 +98,7 @@ func main() {
 			continue
 		}
 
-		log.Printf("VERSION %s DATES: [%s] Result:\n%+v", versionNumber, dateList, data)
+		// log.Printf("VERSION %s DATES: [%s] Result:\n%+v", versionNumber, dateList, data)
 
 		for _, d := range data.Data {
 			dateObj, err := time.Parse(firefoxtelemetry.TelemetryDateFormat, d.Date)

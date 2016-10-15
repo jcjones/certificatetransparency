@@ -97,7 +97,7 @@ func (tc *TelemetryClient) GetAggregates(measure string, channel string, dates [
 	q.Add("dates", strings.Join(dateStrings, ","))
 	q.Add("metric", measure)
 	req.URL.RawQuery = q.Encode()
-	fmt.Printf("URI: %s\n\n", req.URL)
+	// fmt.Printf("URI: %s\n\n", req.URL)
 
 	client := http.Client{
 		Timeout: time.Second * 10,
