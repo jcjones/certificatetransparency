@@ -9,6 +9,7 @@ package firefoxtelemetry
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
@@ -33,7 +34,18 @@ type AggregateBody struct {
 	Data    []AggregateDateBody
 }
 
-// curl 'https://aggregates.telemetry.mozilla.org/aggregates_by/submission_date/channels/release/?version=39&dates=20161013%2C20161012%2C20161011%2C20161010%2C20161009%2C20161008%2C20161007%2C20161006%2C20161005%2C20161004%2C20161003%2C20161002%2C20161001%2C20160930%2C20160929%2C20160928%2C20160927%2C20160926%2C20160925%2C20160924%2C20160923%2C20160922%2C20160921%2C20160920%2C20160919%2C20160918%2C20160917%2C20160916%2C20160915%2C20160914%2C20160913%2C20160912%2C20160911%2C20160910%2C20160909%2C20160908%2C20160907%2C20160906%2C20160905%2C20160904%2C20160903%2C20160902%2C20160901%2C20160831%2C20160830%2C20160829%2C20160828%2C20160827%2C20160826%2C20160825%2C20160824%2C20160823%2C20160822%2C20160821%2C20160820%2C20160819%2C20160818%2C20160817%2C20160816%2C20160815%2C20160814%2C20160813%2C20160812%2C20160811%2C20160810%2C20160809%2C20160808%2C20160807%2C20160806%2C20160805%2C20160804%2C20160803%2C20160802%2C20160801%2C20160731%2C20160730%2C20160729%2C20160728%2C20160727%2C20160726%2C20160725%2C20160724%2C20160723%2C20160722%2C20160721%2C20160720%2C20160719%2C20160718%2C20160717%2C20160716%2C20160715%2C20160714%2C20160713%2C20160711%2C20160710%2C20160709%2C20160708%2C20160707%2C20160706%2C20160705%2C20160704%2C20160703%2C20160702%2C20160701%2C20160630%2C20160629%2C20160628%2C20160627%2C20160624%2C20160623%2C20160622%2C20160621%2C20160620%2C20160619%2C20160618%2C20160617%2C20160616%2C20160615%2C20160614%2C20160613%2C20160612%2C20160611%2C20160610%2C20160609%2C20160608%2C20160607%2C20160606%2C20160604%2C20160603%2C20160602%2C20160601%2C20160531%2C20160530%2C20160529%2C20160528%2C20160527%2C20160526%2C20160525%2C20160524%2C20160523%2C20160522%2C20160521%2C20160520%2C20160519%2C20160518%2C20160517%2C20160516%2C20160515%2C20160514%2C20160513%2C20160512%2C20160511%2C20160505%2C20160504%2C20160501%2C20160429%2C20160427%2C20160426%2C20160425%2C20160424%2C20160423%2C20160422%2C20160421%2C20160420%2C20160419%2C20160418%2C20160416%2C20160415%2C20160414%2C20160413%2C20160412%2C20160411%2C20160410%2C20160409%2C20160408%2C20160407%2C20160406%2C20160405%2C20160404%2C20160403%2C20160401%2C20160331%2C20160330%2C20160329%2C20160328%2C20160327%2C20160326%2C20160325%2C20160323%2C20160321%2C20160319%2C20160318%2C20160317%2C20160316%2C20160315%2C20160314%2C20160313%2C20160312%2C20160311%2C20160310%2C20160309%2C20160308%2C20160307%2C20160306%2C20160305%2C20160303%2C20160302&metric=HTTP_PAGELOAD_IS_SSL' -H 'Host: aggregates.telemetry.mozilla.org' -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.11; rv:50.0) Gecko/20100101 Firefox/50.0' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: en-US,en;q=0.5' --compressed -H 'Referer: https://ipv.sx/telemetry/general-v2.html?channels=release&measure=HTTP_PAGELOAD_IS_SSL&target=1&absolute=0&relative=1' -H 'Origin: https://ipv.sx' -H 'DNT: 1' -H 'Connection: keep-alive'
+type BuildVersionDate struct {
+	Date    string
+	Version string
+}
+
+func makeHttpError(resp *http.Response) error {
+	body := "(body too large)"
+	if buffer, err := ioutil.ReadAll(resp.Body); err == nil {
+		body = string(buffer)
+	}
+	return fmt.Errorf("Status: %s\nURI: %s\nBody: %s\n-------------\n", resp.Status, resp.Request.URL, body)
+}
 
 func NewClient() (*TelemetryClient, error) {
 	client := TelemetryClient{
@@ -42,25 +54,12 @@ func NewClient() (*TelemetryClient, error) {
 	return &client, nil
 }
 
-func (tc *TelemetryClient) GetAggregates(measure string, channel string, dates []time.Time) (*AggregateBody, error) {
-	uri := fmt.Sprintf("%s/aggregates_by/submission_date/channels/%s", tc.baseURL, channel)
-
+func (tc *TelemetryClient) GetVersions(channel string) ([]BuildVersionDate, error) {
+	uri := fmt.Sprintf("%s/aggregates_by/submission_date/channels/%s/dates/", tc.baseURL, channel)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	q := req.URL.Query()
-	q.Add("version", "39")
-
-	dateStrings := []string{}
-	for _, t := range dates {
-		dateStrings = append(dateStrings, t.Format(TelemetryDateFormat))
-	}
-
-	q.Add("dates", strings.Join(dateStrings, ","))
-	q.Add("metric", measure)
-	req.URL.RawQuery = q.Encode()
 
 	client := http.Client{
 		Timeout: time.Second * 10,
@@ -70,8 +69,49 @@ func (tc *TelemetryClient) GetAggregates(measure string, channel string, dates [
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode > 399 {
+		return nil, makeHttpError(resp)
+	}
+
+	data := []BuildVersionDate{}
+	err = json.NewDecoder(resp.Body).Decode(&data)
+	return data, err
+}
+
+func (tc *TelemetryClient) GetAggregates(measure string, channel string, dates []time.Time, version string) (*AggregateBody, error) {
+	uri := fmt.Sprintf("%s/aggregates_by/submission_date/channels/%s", tc.baseURL, channel)
+
+	req, err := http.NewRequest("GET", uri, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	q := req.URL.Query()
+	q.Add("version", version)
+
+	dateStrings := []string{}
+	for _, t := range dates {
+		dateStrings = append(dateStrings, t.Format(TelemetryDateFormat))
+	}
+
+	q.Add("dates", strings.Join(dateStrings, ","))
+	q.Add("metric", measure)
+	req.URL.RawQuery = q.Encode()
+	fmt.Printf("URI: %s\n\n", req.URL)
+
+	client := http.Client{
+		Timeout: time.Second * 10,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode > 399 {
+		return nil, makeHttpError(resp)
+	}
 
 	data := &AggregateBody{}
-	json.NewDecoder(resp.Body).Decode(data)
-	return data, nil
+	err = json.NewDecoder(resp.Body).Decode(data)
+	return data, err
 }

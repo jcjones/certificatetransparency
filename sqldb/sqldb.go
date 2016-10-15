@@ -99,10 +99,10 @@ type NetscanQueue struct {
 }
 
 type FirefoxPageloadIsTLS struct {
-	Date           time.Time `db:"date, primarykey"` // Date when this resolution was performed
-	CountTLS       int       `db:"countTLS"`         // Number of TLS pageloads
-	CountPageloads int       `db:"countPageloads"`   // Number of total pageloads
-	TimeAdded      time.Time `db:"timeAdded"`        // Date when this resolution was performed
+	Datestamp      time.Time `db:"datestamp, primarykey"` // Date when this resolution was performed
+	CountTLS       int       `db:"countTLS"`              // Number of TLS pageloads
+	CountPageloads int       `db:"countPageloads"`        // Number of total pageloads
+	TimeAdded      time.Time `db:"timeAdded"`             // Date when this resolution was performed
 }
 
 func Uint64ToTimestamp(timestamp uint64) time.Time {
@@ -185,13 +185,13 @@ func (edb *EntriesDatabase) InitTables() error {
 	edb.DbMap.AddTableWithName(ResolvedName{}, "resolvedname")
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
 	edb.DbMap.AddTableWithName(NetscanQueue{}, "netscanqueue")
+	edb.DbMap.AddTableWithName(FirefoxPageloadIsTLS{}, "firefoxpageloadstls")
 
 	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain").SetKeys(true, "regdomID")
 	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
 	edb.DbMap.AddTableWithName(Certificate{}, "certificate").SetKeys(true, "CertID")
 	edb.DbMap.AddTableWithName(FQDN{}, "fqdn").SetKeys(true, "NameID")
 	edb.DbMap.AddTableWithName(Issuer{}, "issuer").SetKeys(true, "IssuerID")
-	edb.DbMap.AddTableWithName(FirefoxPageloadIsTLS{}, "firefoxpageloadstls")
 
 	// All is well, no matter what.
 	return nil
@@ -575,7 +575,7 @@ func (edb *EntriesDatabase) UnqueueFromNetscan(nameId uint64) error {
 
 func (edb *EntriesDatabase) InsertOrUpdatePageloadIsTLS(datestamp time.Time, isTLS int, count int) error {
 	obj := &FirefoxPageloadIsTLS{
-		Date:           datestamp,
+		Datestamp:      datestamp,
 		TimeAdded:      time.Now(),
 		CountTLS:       isTLS,
 		CountPageloads: count,

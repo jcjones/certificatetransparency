@@ -3,11 +3,11 @@
 -- SQL in section 'Up' is executed when this migration is applied
 
 CREATE TABLE `firefoxpageloadstls` (
-  `date` date,
+  `datestamp` date,
   `countTLS` int unsigned,
   `countPageloads` int unsigned,
   `timeAdded` datetime,
-  PRIMARY KEY (`date`)
+  PRIMARY KEY (`datestamp`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- +goose Down

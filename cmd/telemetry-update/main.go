@@ -60,32 +60,71 @@ func main() {
 		log.Fatalf("unable to open Telemetry Client: %s", err)
 	}
 
-	// Assemble the dates we want to query
-	dates := []time.Time{}
-	for i := 1; i < *config.HistoricalDays; i++ {
-		dates = append(dates, time.Now().AddDate(0, 0, -i))
-	}
-
-	// Obtain data from Firefox Telemetry
-	data, err := client.GetAggregates("HTTP_PAGELOAD_IS_SSL", "release", dates)
+	// Find the versions and dates we can query
+	versionList, err := client.GetVersions("release")
 	if err != nil {
-		log.Fatalf("unable to get telemetry: %s", err)
+		log.Fatalf("unable to get telemetry versions: %s", err)
+	}
+	// log.Printf("%+v", versionList)
+
+	// Filter on the oldest date we want
+	oldestDate := time.Now().AddDate(0, 0, -1**config.HistoricalDays)
+
+	versionDateMap := make(map[string][]time.Time)
+	for _, obj := range versionList {
+		timeObj, err := time.Parse(firefoxtelemetry.TelemetryDateFormat, obj.Date)
+		if err != nil {
+			// log.Fatalf("unable to parse date in GetVersions: %s", err)
+			continue
+		}
+		if timeObj.Before(oldestDate) {
+			continue
+		}
+		versionDateMap[obj.Version] = append(versionDateMap[obj.Version], timeObj)
 	}
 
-	for _, d := range data.Data {
-		isTLS := d.Histogram[1]
-		count := d.Histogram[0] + d.Histogram[1]
-		percentTLS := (float64)(isTLS) / (float64)(count)
-		dateObj, err := time.Parse(firefoxtelemetry.TelemetryDateFormat, d.Date)
+	type TelemetryResult struct {
+		LoadsTLS   int
+		LoadsTotal int
+	}
+
+	dateDataMap := make(map[time.Time]TelemetryResult)
+
+	for versionNumber, dateList := range versionDateMap {
+		// Obtain data from Firefox Telemetry
+		data, err := client.GetAggregates("HTTP_PAGELOAD_IS_SSL", "release", dateList, versionNumber)
 		if err != nil {
-			log.Fatalf("unable to parse date: %s", err)
+			log.Printf("unable to get telemetry: %s", err)
+			continue
 		}
 
+		log.Printf("VERSION %s DATES: [%s] Result:\n%+v", versionNumber, dateList, data)
+
+		for _, d := range data.Data {
+			dateObj, err := time.Parse(firefoxtelemetry.TelemetryDateFormat, d.Date)
+			if err != nil {
+				log.Fatalf("unable to parse date in GetAggregates: %s", err)
+			}
+
+			entry, exists := dateDataMap[dateObj]
+			if !exists {
+				entry = TelemetryResult{}
+			}
+
+			entry.LoadsTLS += d.Histogram[1]
+			entry.LoadsTotal += d.Histogram[0] + d.Histogram[1]
+
+			dateDataMap[dateObj] = entry
+		}
+	}
+
+	for dateObj, result := range dateDataMap {
 		if *config.Verbose {
-			log.Printf("%s: (%d / %d) = %f percent was TLS\n", dateObj, isTLS, count, percentTLS)
+			percentTLS := (float64)(result.LoadsTLS) / (float64)(result.LoadsTotal)
+			log.Printf("%s: (%d / %d) = %f percent was TLS\n", dateObj, result.LoadsTLS, result.LoadsTotal, percentTLS)
 		}
 
-		err = entriesDb.InsertOrUpdatePageloadIsTLS(dateObj, isTLS, count)
+		err = entriesDb.InsertOrUpdatePageloadIsTLS(dateObj, result.LoadsTLS, result.LoadsTotal)
 		if err != nil {
 			log.Fatalf("unable to update DB: %s", err)
 		}
