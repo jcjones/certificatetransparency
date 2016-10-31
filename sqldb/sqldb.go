@@ -34,6 +34,13 @@ type Certificate struct {
 	NotAfter  time.Time `db:"notAfter"`                          // Date after which this cert should be considered invalid
 }
 
+type UnexpiredCertificate struct {
+	CertID    uint64    `db:"certID"` // Internal Cert Identifier
+	IssuerID  int       `db:"issuerID"`           // Internal Issuer ID
+	NotBefore time.Time `db:"notBefore"`          // Date before which this cert should be considered invalid
+	NotAfter  time.Time `db:"notAfter"`           // Date after which this cert should be considered invalid
+}
+
 type Issuer struct {
 	IssuerID       int    `db:"issuerID, primarykey, autoincrement"` // Internal Issuer ID
 	CommonName     string `db:"commonName"`                          // Issuer CN
@@ -63,8 +70,10 @@ type RegisteredDomain struct {
 }
 
 type CertificateLog struct {
-	LogID int    `db:"logID, primarykey, autoincrement"` // Log Identifier (FK to CertificateLog)
-	URL   string `db:"url"`                              // URL to the log
+	LogID         int       `db:"logID, primarykey, autoincrement"` // Log Identifier (FK to CertificateLog)
+	URL           string    `db:"url"`                              // URL to the log
+	MaxEntry      uint64    `db:"maxEntry"`                         // The most recent entryID logged
+	LastEntryTime time.Time `db:"lastEntryTime"`                    // Date when we completed the last update
 }
 
 type CertificateLogEntry struct {
@@ -119,7 +128,7 @@ func errorIsNotDuplicate(err error) bool {
 
 type EntriesDatabase struct {
 	DbMap        *gorp.DbMap
-	LogId        int
+	LogObj       *CertificateLog
 	Verbose      bool
 	FullCerts    *utils.FolderDatabase
 	IssuerFilter *string
@@ -186,6 +195,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	edb.DbMap.AddTableWithName(ResolvedPlace{}, "resolvedplace")
 	edb.DbMap.AddTableWithName(NetscanQueue{}, "netscanqueue")
 	edb.DbMap.AddTableWithName(FirefoxPageloadIsTLS{}, "firefoxpageloadstls")
+	edb.DbMap.AddTableWithName(UnexpiredCertificate{}, "unexpired_certificate")
 
 	edb.DbMap.AddTableWithName(RegisteredDomain{}, "registereddomain").SetKeys(true, "regdomID")
 	edb.DbMap.AddTableWithName(CertificateLog{}, "ctlog").SetKeys(true, "LogID")
@@ -198,8 +208,17 @@ func (edb *EntriesDatabase) InitTables() error {
 }
 
 func (edb *EntriesDatabase) Count() (count uint64, err error) {
-	err = edb.DbMap.SelectOne(&count, "SELECT CASE WHEN MAX(e.entryId) IS NULL THEN 0 ELSE MAX(e.entryId)+1 END FROM ctlogentry AS e WHERE e.logID = ?", edb.LogId)
+	count = edb.LogObj.MaxEntry
 	return
+}
+
+func (edb *EntriesDatabase) Finish(lastEntryID uint64, lastEntryTime uint64) error {
+	edb.LogObj.MaxEntry = lastEntryID
+	if lastEntryTime != 0 {
+		edb.LogObj.LastEntryTime = Uint64ToTimestamp(lastEntryTime)
+	}
+	_, err := edb.DbMap.Update(edb.LogObj)
+	return err
 }
 
 func (edb *EntriesDatabase) SetLog(url string) error {
@@ -216,7 +235,7 @@ func (edb *EntriesDatabase) SetLog(url string) error {
 		}
 	}
 
-	edb.LogId = certLogObj.LogID
+	edb.LogObj = &certLogObj
 	return nil
 }
 
@@ -316,6 +335,20 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 		if certId == 0 {
 			// Can't continue, so abort
 			return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate serial=%s obj=%+v", serialNum, certObj)
+		}
+
+		// Insert the certificate into the unexpired_certificates table, if it is unexpired
+		if cert.NotBefore.Before(time.Now()) && cert.NotAfter.After(time.Now()) {
+			unexpiredObj := &UnexpiredCertificate{
+				CertID:    certId,
+				IssuerID:  issuerID,
+				NotBefore: cert.NotBefore.UTC(),
+				NotAfter:  cert.NotAfter.UTC(),
+			}
+			err = txn.Insert(unexpiredObj)
+			if err != nil {
+				return txn, 0, fmt.Errorf("DB error on unexpired cert insertion: %#v: %s", unexpiredObj, err)
+			}
 		}
 	}
 
@@ -529,7 +562,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 
 		certLogEntry := &CertificateLogEntry{
 			CertID:    certId,
-			LogID:     edb.LogId,
+			LogID:     edb.LogObj.LogID,
 			EntryID:   uint64(entry.Index),
 			EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
 		}

@@ -12,9 +12,11 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -35,11 +37,11 @@ var (
 // download or tree hash).
 type OperationStatus struct {
 	// Start contains the requested starting index of the operation.
-	Start int64
+	Start uint64
 	// Current contains the greatest index that has been processed.
-	Current int64
+	Current uint64
 	// Length contains the total number of entries.
-	Length int64
+	Length uint64
 }
 
 func (status OperationStatus) Percentage() float32 {
@@ -137,14 +139,20 @@ func insertCensysWorker(entries <-chan censysdata.CensysEntry, db *sqldb.Entries
 // it until the function is complete, when it will be closed. The log entries
 // are provided to an output channel.
 func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogEntry,
-	status chan<- OperationStatus, start, upTo int64) (int64, error) {
+	status chan<- OperationStatus, start, upTo uint64) (uint64, uint64, error) {
 	if outEntries == nil {
-		return 0, fmt.Errorf("No output channel provided")
+		return start, 0, fmt.Errorf("No output channel provided")
 	}
 	defer close(outEntries)
 	if status != nil {
 		defer close(status)
 	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, os.Interrupt)
+	defer close(sigChan)
+
+	var lastTime uint64
 
 	index := start
 	for index < upTo {
@@ -156,22 +164,29 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 		if max >= upTo {
 			max = upTo - 1
 		}
-		rawEnts, err := ctLog.GetEntries(index, max)
+		rawEnts, err := ctLog.GetEntries(int64(index), int64(max))
 		if err != nil {
-			return index, err
+			return index, lastTime, err
 		}
 
 		for _, ent := range rawEnts {
-			outEntries <- ent
-			if (ent.Index) != index {
-				return index, fmt.Errorf("Index mismatch, local: %v, remote: %v", index, ent.Index)
-			}
+			// Are there waiting signals?
+			select {
+			case sig := <- sigChan:
+				return index, lastTime, fmt.Errorf("Signal caught: %s", sig)
+			default:
+				outEntries <- ent
+				lastTime = ent.Leaf.TimestampedEntry.Timestamp
+				if uint64(ent.Index) != index {
+					return index, lastTime, fmt.Errorf("Index mismatch, local: %v, remote: %v", index, ent.Index)
+				}
 
-			index++
+				index++
+			}
 		}
 	}
 
-	return index, nil
+	return index, lastTime, nil
 }
 
 func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDatabase) error {
@@ -179,7 +194,7 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 		return fmt.Errorf("Cannot set offsetByte for CT log downloads")
 	}
 
-	fmt.Printf("Fetching signed tree head... ")
+	log.Printf("Fetching signed tree head... ")
 	sth, err := ctLog.GetSTH()
 	if err != nil {
 		return err
@@ -205,9 +220,9 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 		}
 	}
 
-	fmt.Printf("%d total entries at %s\n", sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
+	log.Printf("%d total entries at %s\n", sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
 	if origCount == sth.TreeSize {
-		fmt.Printf("Nothing to do\n")
+		log.Printf("Nothing to do\n")
 		return nil
 	}
 
@@ -216,9 +231,9 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 		endPos = origCount + *config.Limit
 	}
 
-	fmt.Printf("Going from %d to %d\n", origCount, endPos)
+	log.Printf("Going from %d to %d\n", origCount, endPos)
 
-	entryChan := make(chan ct.LogEntry, 100)
+	entryChan := make(chan ct.LogEntry, 25)
 	statusChan := make(chan OperationStatus, 1)
 	wg := new(sync.WaitGroup)
 
@@ -227,16 +242,15 @@ func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDa
 	for i := 0; i < numWorkers; i++ {
 		go insertCTWorker(entryChan, db, wg)
 	}
-	_, err = downloadCTRangeToChannel(ctLog, entryChan, statusChan, int64(origCount), int64(endPos))
+
+	finalIndex, finalTime, err := downloadCTRangeToChannel(ctLog, entryChan, statusChan, origCount, endPos)
+	if err != nil {
+		log.Printf("\nDownload halting, error caught: %s\n", err)
+	}
 	wg.Wait()
 
 	clearLine()
-	if err != nil {
-		err = fmt.Errorf("Error while downloading: %s", err)
-		return err
-	}
-
-	return nil
+	return db.Finish(finalIndex, finalTime)
 }
 
 func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
@@ -298,7 +312,7 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 				}
 			}
 
-			statusChan <- OperationStatus{int64(startOffset), int64(ent.Offset), int64(maxOffset)}
+			statusChan <- OperationStatus{startOffset, ent.Offset, maxOffset}
 		}
 		entryChan <- *ent
 	}

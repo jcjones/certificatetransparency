@@ -179,7 +179,7 @@ func (ns *NetScan) processEntries(entries []ResolutionEntry) error {
 	for i, entry := range entries {
 		entryChan <- entry
 		if i%256 == 0 {
-			progressDisplay.UpdateProgress(0, int64(i), int64(len(entries)))
+			progressDisplay.UpdateProgress(0, uint64(i), uint64(len(entries)))
 		}
 	}
 

@@ -10,11 +10,11 @@ import (
 
 type OperationStatus struct {
 	// Start contains the requested starting index of the operation.
-	Start int64
+	Start uint64
 	// Current contains the greatest index that has been processed.
-	Current int64
+	Current uint64
 	// Length contains the total number of entries.
-	Length int64
+	Length uint64
 }
 
 func (status OperationStatus) Percentage() float32 {
@@ -29,8 +29,8 @@ func (status OperationStatus) Percentage() float32 {
 
 type ProgressMonitor struct {
 	lastTime       time.Time
-	lastCount      int64
-	length         int64
+	lastCount      uint64
+	length         uint64
 	ticksPerMinute float64
 	cachedString   string
 }
@@ -38,8 +38,8 @@ type ProgressMonitor struct {
 func NewProgressMonitor() *ProgressMonitor {
 	return &ProgressMonitor{
 		lastTime:       time.Time{},
-		lastCount:      int64(0),
-		length:         int64(0),
+		lastCount:      uint64(0),
+		length:         uint64(0),
 		ticksPerMinute: float64(0.0),
 		cachedString:   "?",
 	}
@@ -54,7 +54,7 @@ func (pm *ProgressMonitor) String() string {
 	return pm.cachedString
 }
 
-func (pm *ProgressMonitor) UpdateCount(newCount int64) error {
+func (pm *ProgressMonitor) UpdateCount(newCount uint64) error {
 	nowTime := time.Now()
 	countChange := newCount - pm.lastCount
 
@@ -70,7 +70,7 @@ func (pm *ProgressMonitor) UpdateCount(newCount int64) error {
 	return nil
 }
 
-func (pm *ProgressMonitor) UpdateLength(newLength int64) error {
+func (pm *ProgressMonitor) UpdateLength(newLength uint64) error {
 	pm.length = newLength
 	return nil
 }
@@ -93,7 +93,7 @@ func NewProgressDisplay() *ProgressDisplay {
 	}
 }
 
-func (pd *ProgressDisplay) UpdateProgress(start int64, index int64, upTo int64) {
+func (pd *ProgressDisplay) UpdateProgress(start uint64, index uint64, upTo uint64) {
 	pd.statusChan <- OperationStatus{start, index, upTo}
 }
 

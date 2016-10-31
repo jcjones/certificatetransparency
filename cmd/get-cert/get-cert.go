@@ -13,35 +13,22 @@ import (
 	"strconv"
 
 	"github.com/jcjones/ct-sql/utils"
-	"github.com/vharitonsky/iniflags"
 )
 
 var (
-	logUrl         = flag.String("log", "", "URL of the CT Log")
-	censysPath     = flag.String("censysJson", "", "Path to a Censys.io certificate json dump")
-	censysUrl      = flag.String("censysUrl", "", "URL to a Censys.io certificate json dump")
-	dbConnect      = flag.String("dbConnect", "", "DB Connection String")
-	verbose        = flag.Bool("v", false, "verbose output")
-	certPath       = flag.String("certPath", "", "Path under which to store full DER-encoded certificates")
-	certsPerFolder = flag.Uint64("certsPerFolder", 16384, "Certificates per folder, when stored")
-	offset         = flag.Uint64("offset", 0, "offset from the beginning")
-	offsetByte     = flag.Uint64("offsetByte", 0, "byte offset from the beginning, only for censysJson and not compatible with offset")
-	limit          = flag.Uint64("limit", 0, "limit processing to this many entries")
+	config = utils.NewCTConfig()
 )
 
 func main() {
-	flag.Set("allowUnknownFlags", "true")
-	iniflags.Parse()
-
-	if certPath == nil || len(*certPath) == 0 {
+	if config.CertPath == nil || len(*config.CertPath) == 0 {
 		fmt.Fprintln(os.Stderr, "You must specify a Certificate Path")
 		os.Exit(1)
 		return
 	}
 
-	certFolderDB, err := utils.NewFolderDatabase(*certPath, 0444, *certsPerFolder)
+	certFolderDB, err := utils.NewFolderDatabase(*config.CertPath, 0444, *config.CertsPerFolder)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, fmt.Sprintf("unable to open Certificate Path: %s: %s", certPath, err))
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("unable to open Certificate Path: %s: %s", config.CertPath, err))
 		os.Exit(1)
 		return
 	}
