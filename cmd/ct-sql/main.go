@@ -328,7 +328,7 @@ func main() {
 
 	if config.LogUrlList != nil && len(*config.LogUrlList) > 5 {
 		for _, part := range strings.Split(*config.LogUrlList, ",") {
-			ctLogUrl, err := url.Parse(part)
+			ctLogUrl, err := url.Parse(strings.TrimSpace(part))
 			if err != nil {
 				log.Fatalf("unable to set Certificate Log: %s", err)
 			}
