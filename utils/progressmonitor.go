@@ -29,27 +29,65 @@ func (status OperationStatus) Percentage() float32 {
 	return done * 100 / total
 }
 
-type ProgressMonitor struct {
+type OperationData struct {
 	lastTime       time.Time
 	lastCount      uint64
 	length         uint64
 	ticksPerMinute float64
-	cachedString   string
 }
 
-func NewProgressMonitor() *ProgressMonitor {
-	return &ProgressMonitor{
+func NewOperationData() *OperationData {
+	return &OperationData{
 		lastTime:       time.Time{},
 		lastCount:      uint64(0),
 		length:         uint64(0),
 		ticksPerMinute: float64(0.0),
-		cachedString:   "?",
+	}
+}
+
+type ProgressMonitor struct {
+	operations   map[string]OperationData
+	cachedString string
+}
+
+func NewProgressMonitor() *ProgressMonitor {
+	return &ProgressMonitor{
+		operations:   make(map[string]OperationData),
+		cachedString: "?",
 	}
 }
 
 func (pm *ProgressMonitor) getTimeRemaining() time.Duration {
-	minutesRemaining := float64(pm.length-pm.lastCount) / pm.ticksPerMinute
+	remaining := pm.CurrentLength() - pm.CurrentPosition()
+	rate := pm.getInstantRateMinute()
+	minutesRemaining := float64(remaining) / rate
 	return time.Duration(minutesRemaining) * time.Minute
+}
+
+func (pm *ProgressMonitor) CurrentPercentage() float64 {
+	var completed uint64
+	var total uint64
+	for _, op := range pm.operations {
+		completed += op.lastCount
+		total += op.length
+	}
+	return float64(completed) / float64(total)
+}
+
+func (pm *ProgressMonitor) CurrentPosition() uint64 {
+	var completed uint64
+	for _, op := range pm.operations {
+		completed += op.lastCount
+	}
+	return completed
+}
+
+func (pm *ProgressMonitor) CurrentLength() uint64 {
+	var total uint64
+	for _, op := range pm.operations {
+		total += op.length
+	}
+	return total
 }
 
 func (pm *ProgressMonitor) String() string {
@@ -57,28 +95,45 @@ func (pm *ProgressMonitor) String() string {
 }
 
 func (pm *ProgressMonitor) UpdateCount(identifier string, newCount uint64) error {
-	nowTime := time.Now()
-	countChange := newCount - pm.lastCount
-
-	if !pm.lastTime.IsZero() {
-		timeElapsed := nowTime.Sub(pm.lastTime)
-		pm.ticksPerMinute = float64(countChange) / timeElapsed.Minutes()
-		pm.cachedString = fmt.Sprintf("%.0f/minute (%s remaining)", pm.getInstantRateMinute(), pm.getTimeRemaining())
+	opObj, ok := pm.operations[identifier]
+	if !ok {
+		opObj = *NewOperationData()
 	}
 
-	pm.lastCount = newCount
-	pm.lastTime = nowTime
+	nowTime := time.Now()
+	countChange := newCount - opObj.lastCount
+
+	if !opObj.lastTime.IsZero() {
+		timeElapsed := nowTime.Sub(opObj.lastTime)
+		opObj.ticksPerMinute = float64(countChange) / timeElapsed.Minutes()
+	}
+	pm.cachedString = fmt.Sprintf("%.1f%% (%d of %d) Rate: %.0f/minute (%s remaining)",
+		pm.CurrentPercentage(), pm.CurrentPosition(), pm.CurrentLength(),
+		pm.getInstantRateMinute(), pm.getTimeRemaining())
+
+	opObj.lastCount = newCount
+	opObj.lastTime = nowTime
+	pm.operations[identifier] = opObj
 
 	return nil
 }
 
 func (pm *ProgressMonitor) UpdateLength(identifier string, newLength uint64) error {
-	pm.length = newLength
+	opObj, ok := pm.operations[identifier]
+	if !ok {
+		opObj = *NewOperationData()
+	}
+	opObj.length = newLength
+	pm.operations[identifier] = opObj
 	return nil
 }
 
 func (pm *ProgressMonitor) getInstantRateMinute() float64 {
-	return pm.ticksPerMinute
+	var rate float64
+	for _, op := range pm.operations {
+		rate += op.ticksPerMinute
+	}
+	return rate
 }
 
 func clearLine() {
@@ -146,13 +201,11 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 			}
 
 			// Display the line
-			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %s", status.Percentage(), status.Current, status.Length, progressMonitor)
-
 			if isInteractive {
 				clearLine()
-				fmt.Printf("%s %s", symbols[symbolIndex], statusLine)
+				fmt.Printf("%s %s", symbols[symbolIndex], progressMonitor)
 			} else {
-				fmt.Println(statusLine)
+				fmt.Printf("%s\n", progressMonitor)
 			}
 		}
 	}()

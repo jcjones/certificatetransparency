@@ -68,45 +68,50 @@ func (ld *LogDownloader) Stop() {
 	ld.Display.Close()
 }
 
-func (ld *LogDownloader) Download(ctLogUrl url.URL) {
+func (ld *LogDownloader) Download(ctLogUrl string) {
 	if *config.OffsetByte > 0 {
-		log.Printf("[%s] Cannot set offsetByte for CT log downloads", ctLogUrl.String())
+		log.Printf("[%s] Cannot set offsetByte for CT log downloads", ctLogUrl)
 		return
 	}
 
-	ctLog := client.New(ctLogUrl.String(), nil)
+	ctLog := client.New(ctLogUrl, nil)
 
-	log.Printf("[%s] Fetching signed tree head... ", ctLogUrl.String())
+	log.Printf("[%s] Fetching signed tree head... ", ctLogUrl)
 	sth, err := ctLog.GetSTH()
 	if err != nil {
-		log.Printf("[%s] Unable to fetch signed tree head: %s", ctLogUrl.String(), err)
+		log.Printf("[%s] Unable to fetch signed tree head: %s", ctLogUrl, err)
 		return
 	}
 
 	// Set pointer in DB, now that we've verified the log works
-	logObj, err := ld.Database.GetLogState(fmt.Sprintf("%s%s", ctLogUrl.Host, ctLogUrl.Path))
+	urlParts, err := url.Parse(ctLogUrl)
 	if err != nil {
-		log.Printf("[%s] Unable to set Certificate Log: %s", ctLogUrl.String(), err)
+		log.Printf("[%s] Unable to parse Certificate Log: %s", ctLogUrl, err)
+		return
+	}
+	logObj, err := ld.Database.GetLogState(fmt.Sprintf("%s%s", urlParts.Host, urlParts.Path))
+	if err != nil {
+		log.Printf("[%s] Unable to set Certificate Log: %s", ctLogUrl, err)
 		return
 	}
 
 	var origCount uint64
 	// Now we're OK to use the DB
 	if *config.Offset > 0 {
-		log.Printf("[%s] Starting from offset %d", ctLogUrl.String(), *config.Offset)
+		log.Printf("[%s] Starting from offset %d", ctLogUrl, *config.Offset)
 		origCount = *config.Offset
 	} else {
-		log.Printf("[%s] Counting existing entries... ", ctLogUrl.String())
+		log.Printf("[%s] Counting existing entries... ", ctLogUrl)
 		origCount = logObj.MaxEntry
 		if err != nil {
-			log.Printf("[%s] Failed to read entries file: %s", ctLogUrl.String(), err)
+			log.Printf("[%s] Failed to read entries file: %s", ctLogUrl, err)
 			return
 		}
 	}
 
-	log.Printf("[%s] %d total entries at %s\n", ctLogUrl.String(), sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
+	log.Printf("[%s] %d total entries at %s\n", ctLogUrl, sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
 	if origCount == sth.TreeSize {
-		log.Printf("[%s] Nothing to do\n", ctLogUrl.String())
+		log.Printf("[%s] Nothing to do\n", ctLogUrl)
 		return
 	}
 
@@ -115,11 +120,11 @@ func (ld *LogDownloader) Download(ctLogUrl url.URL) {
 		endPos = origCount + *config.Limit
 	}
 
-	log.Printf("[%s] Going from %d to %d\n", ctLogUrl.String(), origCount, endPos)
+	log.Printf("[%s] Going from %d to %d\n", ctLogUrl, origCount, endPos)
 
 	finalIndex, finalTime, err := ld.DownloadCTRangeToChannel(logObj.LogID, ctLog, origCount, endPos)
 	if err != nil {
-		log.Printf("\n[%s] Download halting, error caught: %s\n", ctLogUrl.String(), err)
+		log.Printf("\n[%s] Download halting, error caught: %s\n", ctLogUrl, err)
 	}
 
 	logObj.MaxEntry = finalIndex
@@ -127,7 +132,7 @@ func (ld *LogDownloader) Download(ctLogUrl url.URL) {
 		logObj.LastEntryTime = sqldb.Uint64ToTimestamp(finalTime)
 	}
 
-	log.Printf("[%s] Saved state. MaxEntry=%d, LastEntryTime=%s", ctLogUrl.String(), logObj.MaxEntry, logObj.LastEntryTime)
+	log.Printf("[%s] Saved state. MaxEntry=%d, LastEntryTime=%s", ctLogUrl, logObj.MaxEntry, logObj.LastEntryTime)
 	ld.Database.SaveLogState(logObj)
 }
 
@@ -337,26 +342,25 @@ func main() {
 		logDownloader.StartThreads()
 
 		for _, ctLogUrl := range logUrls {
-			log.Printf("[%s] Starting download. FullCerts=%t\n", ctLogUrl.String(), (certFolderDB != nil))
+			urlString := ctLogUrl.String()
+			log.Printf("[%s] Starting download. FullCerts=%t\n", urlString, (certFolderDB != nil))
 
 			logDownloader.DownloaderWaitGroup.Add(1)
 			go func() {
 				defer logDownloader.DownloaderWaitGroup.Done()
 				for {
-					logDownloader.Download(ctLogUrl)
+					logDownloader.Download(urlString)
 					if !*config.RunForever {
 						return
 					}
 					sleepTime := time.Duration(*config.PollingDelay) * time.Minute
-					log.Printf("[%s] Completed. Polling again in %s.\n", ctLogUrl.String(), sleepTime)
+					log.Printf("[%s] Completed. Polling again in %s.\n", urlString, sleepTime)
 					time.Sleep(sleepTime)
 				}
 			}()
-
 		}
 
 		logDownloader.DownloaderWaitGroup.Wait() // Wait for downloaders to stop
-
 		logDownloader.Stop()                 // Stop workers
 		logDownloader.ThreadWaitGroup.Wait() // Wait for workers to stop
 		os.Exit(0)
