@@ -348,6 +348,12 @@ func main() {
 			logDownloader.DownloaderWaitGroup.Add(1)
 			go func() {
 				defer logDownloader.DownloaderWaitGroup.Done()
+
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, syscall.SIGTERM, os.Interrupt)
+				defer signal.Stop(sigChan)
+				defer close(sigChan)
+
 				for {
 					logDownloader.Download(urlString)
 					if !*config.RunForever {
@@ -355,14 +361,21 @@ func main() {
 					}
 					sleepTime := time.Duration(*config.PollingDelay) * time.Minute
 					log.Printf("[%s] Completed. Polling again in %s.\n", urlString, sleepTime)
-					time.Sleep(sleepTime)
+
+					select {
+					case <-sigChan:
+						log.Printf("[%s] Signal caught.\n", urlString)
+						return
+					case <-time.After(sleepTime):
+						continue
+					}
 				}
 			}()
 		}
 
 		logDownloader.DownloaderWaitGroup.Wait() // Wait for downloaders to stop
-		logDownloader.Stop()                 // Stop workers
-		logDownloader.ThreadWaitGroup.Wait() // Wait for workers to stop
+		logDownloader.Stop()                     // Stop workers
+		logDownloader.ThreadWaitGroup.Wait()     // Wait for workers to stop
 		os.Exit(0)
 	}
 

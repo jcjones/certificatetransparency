@@ -194,8 +194,8 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 				}
 
 				// Track speed statistics
-				progressMonitor.UpdateCount(status.Identifier, status.Current - status.Start)
-				progressMonitor.UpdateLength(status.Identifier, status.Length - status.Start)
+				progressMonitor.UpdateCount(status.Identifier, status.Current-status.Start)
+				progressMonitor.UpdateLength(status.Identifier, status.Length-status.Start)
 			case <-ticker.C:
 				symbolIndex = (symbolIndex + 1) % len(symbols)
 			}
