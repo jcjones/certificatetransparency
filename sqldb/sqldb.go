@@ -128,7 +128,6 @@ func errorIsNotDuplicate(err error) bool {
 
 type EntriesDatabase struct {
 	DbMap        *gorp.DbMap
-	LogObj       *CertificateLog
 	Verbose      bool
 	FullCerts    *utils.FolderDatabase
 	IssuerFilter *string
@@ -207,21 +206,7 @@ func (edb *EntriesDatabase) InitTables() error {
 	return nil
 }
 
-func (edb *EntriesDatabase) Count() (count uint64, err error) {
-	count = edb.LogObj.MaxEntry
-	return
-}
-
-func (edb *EntriesDatabase) Finish(lastEntryID uint64, lastEntryTime uint64) error {
-	edb.LogObj.MaxEntry = lastEntryID
-	if lastEntryTime != 0 {
-		edb.LogObj.LastEntryTime = Uint64ToTimestamp(lastEntryTime)
-	}
-	_, err := edb.DbMap.Update(edb.LogObj)
-	return err
-}
-
-func (edb *EntriesDatabase) SetLog(url string) error {
+func (edb *EntriesDatabase) GetLogState(url string) (*CertificateLog, error) {
 	var certLogObj CertificateLog
 
 	err := edb.DbMap.SelectOne(&certLogObj, "SELECT * FROM ctlog WHERE url = ?", url)
@@ -230,13 +215,13 @@ func (edb *EntriesDatabase) SetLog(url string) error {
 		certLogObj.URL = url
 
 		err = edb.DbMap.Insert(&certLogObj)
-		if err != nil {
-			return err
-		}
 	}
+	return &certLogObj, err
+}
 
-	edb.LogObj = &certLogObj
-	return nil
+func (edb *EntriesDatabase) SaveLogState(certLogObj *CertificateLog) error {
+	_, err := edb.DbMap.Update(certLogObj)
+	return err
 }
 
 func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Transaction, uint64, error) {
@@ -519,7 +504,7 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 	return txn.Commit()
 }
 
-func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
+func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 	var cert *x509.Certificate
 	var err error
 
@@ -544,7 +529,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 	}
 
 	for count := 0; count < 10; count++ {
-		txn, certId, err := edb.insertCertificate(cert)
+		txn, certID, err := edb.insertCertificate(cert)
 		if err != nil {
 			if edb.Verbose {
 				fmt.Printf("Error inserting cert, retrying (%d/10) %s\n", count, err)
@@ -561,8 +546,8 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry) error {
 		//
 
 		certLogEntry := &CertificateLogEntry{
-			CertID:    certId,
-			LogID:     edb.LogObj.LogID,
+			CertID:    certID,
+			LogID:     logID,
 			EntryID:   uint64(entry.Index),
 			EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
 		}

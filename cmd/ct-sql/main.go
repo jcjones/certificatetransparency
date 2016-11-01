@@ -110,54 +110,130 @@ func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
 	}()
 }
 
-func insertCTWorker(entries <-chan ct.LogEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
-	for ep := range entries {
-		err := db.InsertCTEntry(&ep)
-		if err != nil {
-			log.Printf("Problem inserting certificate: index: %d log: %s error: %s", ep.Index, *config.LogUrl, err)
-		}
+type CtLogEntry struct {
+	LogEntry *ct.LogEntry
+	LogID    int
+}
+
+type LogDownloader struct {
+	Database            *sqldb.EntriesDatabase
+	EntryChan           chan CtLogEntry
+	StatusChan          chan OperationStatus
+	ThreadWaitGroup     *sync.WaitGroup
+	DownloaderWaitGroup *sync.WaitGroup
+}
+
+func NewLogDownloader(db *sqldb.EntriesDatabase) *LogDownloader {
+	return &LogDownloader{
+		Database:            db,
+		EntryChan:           make(chan CtLogEntry, 25),
+		StatusChan:          make(chan OperationStatus, 1),
+		ThreadWaitGroup:     new(sync.WaitGroup),
+		DownloaderWaitGroup: new(sync.WaitGroup),
 	}
 }
 
-func insertCensysWorker(entries <-chan censysdata.CensysEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
-	for ep := range entries {
-		if ep.Valid_nss {
-			err := db.InsertCensysEntry(&ep)
-			if err != nil {
-				log.Printf("Problem inserting certificate: index: %d error: %s", ep.Offset, err)
-			}
+func (ld *LogDownloader) StartThreads() {
+	numWorkers := *config.NumThreads * runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
+		go ld.insertCTWorker()
+	}
+}
+
+func (ld *LogDownloader) StartProgressDisplay() {
+	displayProgress(ld.StatusChan, ld.ThreadWaitGroup)
+}
+
+func (ld *LogDownloader) Stop() {
+	close(ld.EntryChan)
+	if ld.StatusChan != nil {
+		close(ld.StatusChan)
+	}
+}
+
+func (ld *LogDownloader) Download(ctLogUrl url.URL) {
+	if *config.OffsetByte > 0 {
+		log.Printf("[%s] Cannot set offsetByte for CT log downloads", ctLogUrl.String())
+		return
+	}
+
+	ctLog := client.New(ctLogUrl.String(), nil)
+
+	log.Printf("[%s] Fetching signed tree head... ", ctLogUrl.String())
+	sth, err := ctLog.GetSTH()
+	if err != nil {
+		log.Printf("[%s] Unable to fetch signed tree head: %s", ctLogUrl.String(), err)
+		return
+	}
+
+	// Set pointer in DB, now that we've verified the log works
+	logObj, err := ld.Database.GetLogState(fmt.Sprintf("%s%s", ctLogUrl.Host, ctLogUrl.Path))
+	if err != nil {
+		log.Printf("[%s] Unable to set Certificate Log: %s", ctLogUrl.String(), err)
+		return
+	}
+
+	var origCount uint64
+	// Now we're OK to use the DB
+	if *config.Offset > 0 {
+		log.Printf("[%s] Starting from offset %d", ctLogUrl.String(), *config.Offset)
+		origCount = *config.Offset
+	} else {
+		log.Printf("[%s] Counting existing entries... ", ctLogUrl.String())
+		origCount = logObj.MaxEntry
+		if err != nil {
+			log.Printf("[%s] Failed to read entries file: %s", ctLogUrl.String(), err)
+			return
 		}
 	}
+
+	log.Printf("[%s] %d total entries at %s\n", ctLogUrl.String(), sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
+	if origCount == sth.TreeSize {
+		log.Printf("[%s] Nothing to do\n", ctLogUrl.String())
+		return
+	}
+
+	endPos := sth.TreeSize
+	if *config.Limit > 0 && endPos > origCount+*config.Limit {
+		endPos = origCount + *config.Limit
+	}
+
+	log.Printf("[%s] Going from %d to %d\n", ctLogUrl.String(), origCount, endPos)
+
+	finalIndex, finalTime, err := ld.DownloadCTRangeToChannel(logObj.LogID, ctLog, origCount, endPos)
+	if err != nil {
+		log.Printf("\n[%s] Download halting, error caught: %s\n", ctLogUrl.String(), err)
+	}
+
+	logObj.MaxEntry = finalIndex
+	if finalTime != 0 {
+		logObj.LastEntryTime = sqldb.Uint64ToTimestamp(finalTime)
+	}
+
+	log.Printf("[%s] Saved state. MaxEntry=%d, LastEntryTime=%s", ctLogUrl.String(), logObj.MaxEntry, logObj.LastEntryTime)
+	ld.Database.SaveLogState(logObj)
 }
 
 // DownloadRange downloads log entries from the given starting index till one
 // less than upTo. If status is not nil then status updates will be written to
 // it until the function is complete, when it will be closed. The log entries
 // are provided to an output channel.
-func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogEntry,
-	status chan<- OperationStatus, start, upTo uint64) (uint64, uint64, error) {
-	if outEntries == nil {
+func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogClient, start, upTo uint64) (uint64, uint64, error) {
+	if ld.EntryChan == nil {
 		return start, 0, fmt.Errorf("No output channel provided")
-	}
-	defer close(outEntries)
-	if status != nil {
-		defer close(status)
 	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigChan)
 	defer close(sigChan)
 
 	var lastTime uint64
 
 	index := start
 	for index < upTo {
-		if status != nil {
-			status <- OperationStatus{start, index, upTo}
+		if ld.StatusChan != nil {
+			ld.StatusChan <- OperationStatus{start, index, upTo}
 		}
 
 		max := index + 2000
@@ -175,7 +251,7 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 			case sig := <-sigChan:
 				return index, lastTime, fmt.Errorf("Signal caught: %s", sig)
 			default:
-				outEntries <- ent
+				ld.EntryChan <- CtLogEntry{&ent, logID}
 				lastTime = ent.Leaf.TimestampedEntry.Timestamp
 				if uint64(ent.Index) != index {
 					return index, lastTime, fmt.Errorf("Index mismatch, local: %v, remote: %v", index, ent.Index)
@@ -189,68 +265,15 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 	return index, lastTime, nil
 }
 
-func downloadLog(ctLogUrl *url.URL, ctLog *client.LogClient, db *sqldb.EntriesDatabase) error {
-	if *config.OffsetByte > 0 {
-		return fmt.Errorf("Cannot set offsetByte for CT log downloads")
-	}
-
-	log.Printf("Fetching signed tree head... ")
-	sth, err := ctLog.GetSTH()
-	if err != nil {
-		return err
-	}
-
-	// Set pointer in DB, now that we've verified the log works
-	err = db.SetLog(fmt.Sprintf("%s%s", ctLogUrl.Host, ctLogUrl.Path))
-	if err != nil {
-		log.Fatalf("unable to set Certificate Log: %s", err)
-	}
-
-	var origCount uint64
-	// Now we're OK to use the DB
-	if *config.Offset > 0 {
-		log.Printf("Starting from offset %d", *config.Offset)
-		origCount = *config.Offset
-	} else {
-		log.Printf("Counting existing entries... ")
-		origCount, err = db.Count()
+func (ld *LogDownloader) insertCTWorker() {
+	ld.ThreadWaitGroup.Add(1)
+	defer ld.ThreadWaitGroup.Done()
+	for ep := range ld.EntryChan {
+		err := ld.Database.InsertCTEntry(ep.LogEntry, ep.LogID)
 		if err != nil {
-			err = fmt.Errorf("Failed to read entries file: %s", err)
-			return err
+			log.Printf("Problem inserting certificate: index: %d log: %s error: %s", ep.LogEntry.Index, *config.LogUrl, err)
 		}
 	}
-
-	log.Printf("%d total entries at %s\n", sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
-	if origCount == sth.TreeSize {
-		log.Printf("Nothing to do\n")
-		return nil
-	}
-
-	endPos := sth.TreeSize
-	if *config.Limit > 0 && endPos > origCount+*config.Limit {
-		endPos = origCount + *config.Limit
-	}
-
-	log.Printf("Going from %d to %d\n", origCount, endPos)
-
-	entryChan := make(chan ct.LogEntry, 25)
-	statusChan := make(chan OperationStatus, 1)
-	wg := new(sync.WaitGroup)
-
-	displayProgress(statusChan, wg)
-	numWorkers := *config.NumThreads * runtime.NumCPU()
-	for i := 0; i < numWorkers; i++ {
-		go insertCTWorker(entryChan, db, wg)
-	}
-
-	finalIndex, finalTime, err := downloadCTRangeToChannel(ctLog, entryChan, statusChan, origCount, endPos)
-	if err != nil {
-		log.Printf("\nDownload halting, error caught: %s\n", err)
-	}
-	wg.Wait()
-
-	clearLine()
-	return db.Finish(finalIndex, finalTime)
 }
 
 func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
@@ -320,6 +343,19 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 	return nil
 }
 
+func insertCensysWorker(entries <-chan censysdata.CensysEntry, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+	for ep := range entries {
+		if ep.Valid_nss {
+			err := db.InsertCensysEntry(&ep)
+			if err != nil {
+				log.Printf("Problem inserting certificate: index: %d error: %s", ep.Offset, err)
+			}
+		}
+	}
+}
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("")
@@ -359,21 +395,47 @@ func main() {
 		log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)
 	}
 
+	logUrls := []url.URL{}
+
 	if config.LogUrl != nil && len(*config.LogUrl) > 5 {
 		ctLogUrl, err := url.Parse(*config.LogUrl)
 		if err != nil {
 			log.Fatalf("unable to set Certificate Log: %s", err)
 		}
+		logUrls = append(logUrls, *ctLogUrl)
+	}
 
-		ctLog := client.New(*config.LogUrl, nil)
+	if config.LogUrlList != nil && len(*config.LogUrlList) > 5 {
+		for _, part := range strings.Split(*config.LogUrlList, ",") {
+			ctLogUrl, err := url.Parse(part)
+			if err != nil {
+				log.Fatalf("unable to set Certificate Log: %s", err)
+			}
+			logUrls = append(logUrls, *ctLogUrl)
+		}
+	}
 
-		log.Printf("Starting download from log %s, fullCerts=%t\n", ctLogUrl, (certFolderDB != nil))
+	if len(logUrls) > 0 {
+		logDownloader := NewLogDownloader(entriesDb)
+		logDownloader.StartProgressDisplay()
+		logDownloader.StartThreads()
 
-		err = downloadLog(ctLogUrl, ctLog, entriesDb)
-		if err != nil {
-			log.Fatalf("error while updating CT entries: %s", err)
+		for _, ctLogUrl := range logUrls {
+			log.Printf("[%s] Starting download. FullCerts=%t\n", ctLogUrl.String(), (certFolderDB != nil))
+
+			logDownloader.DownloaderWaitGroup.Add(1)
+			go func() {
+				defer logDownloader.DownloaderWaitGroup.Done()
+				logDownloader.Download(ctLogUrl)
+			}()
+
 		}
 
+		logDownloader.DownloaderWaitGroup.Wait() // Wait for downloaders to stop
+
+		logDownloader.Stop()                 // Stop workers
+		logDownloader.ThreadWaitGroup.Wait() // Wait for workers to stop
+		clearLine()
 		os.Exit(0)
 	}
 

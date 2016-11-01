@@ -11,6 +11,7 @@ import (
 
 type CTConfig struct {
 	LogUrl         *string
+	LogUrlList     *string
 	CensysPath     *string
 	CensysUrl      *string
 	CensysStdin    *bool
@@ -29,6 +30,7 @@ type CTConfig struct {
 func NewCTConfig() *CTConfig {
 	ret := &CTConfig{
 		LogUrl:         flag.String("log", "", "URL of the CT Log"),
+		LogUrlList:     flag.String("logList", "", "URLs of the CT Logs, comma delimited"),
 		CensysPath:     flag.String("censysJson", "", "Path to a Censys.io certificate json dump"),
 		CensysUrl:      flag.String("censysUrl", "", "URL to a Censys.io certificate json dump"),
 		CensysStdin:    flag.Bool("censysStdin", false, "Read a Censys.io json dump from stdin"),
