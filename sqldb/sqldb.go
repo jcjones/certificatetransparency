@@ -35,10 +35,10 @@ type Certificate struct {
 }
 
 type UnexpiredCertificate struct {
-	CertID    uint64    `db:"certID"` // Internal Cert Identifier
-	IssuerID  int       `db:"issuerID"`           // Internal Issuer ID
-	NotBefore time.Time `db:"notBefore"`          // Date before which this cert should be considered invalid
-	NotAfter  time.Time `db:"notAfter"`           // Date after which this cert should be considered invalid
+	CertID    uint64 `db:"certID"`    // Internal Cert Identifier
+	IssuerID  int    `db:"issuerID"`  // Internal Issuer ID
+	NotBefore string `db:"notBefore"` // Date before which this cert should be considered invalid
+	NotAfter  string `db:"notAfter"`  // Date after which this cert should be considered invalid
 }
 
 type Issuer struct {
@@ -342,8 +342,8 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 			unexpiredObj := &UnexpiredCertificate{
 				CertID:    certId,
 				IssuerID:  issuerID,
-				NotBefore: cert.NotBefore.UTC(),
-				NotAfter:  cert.NotAfter.UTC(),
+				NotBefore: cert.NotBefore.UTC().Format("2006-01-02"),
+				NotAfter:  cert.NotAfter.UTC().Format("2006-01-02"),
 			}
 			err = txn.Insert(unexpiredObj)
 			if err != nil {

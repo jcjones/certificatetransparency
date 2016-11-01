@@ -172,7 +172,7 @@ func downloadCTRangeToChannel(ctLog *client.LogClient, outEntries chan<- ct.LogE
 		for _, ent := range rawEnts {
 			// Are there waiting signals?
 			select {
-			case sig := <- sigChan:
+			case sig := <-sigChan:
 				return index, lastTime, fmt.Errorf("Signal caught: %s", sig)
 			default:
 				outEntries <- ent
