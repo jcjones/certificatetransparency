@@ -25,6 +25,8 @@ type CTConfig struct {
 	GeoipDbPath    *string
 	NumThreads     *int
 	HistoricalDays *int
+	RunForever     *bool
+	PollingDelay   *int
 }
 
 func NewCTConfig() *CTConfig {
@@ -35,7 +37,7 @@ func NewCTConfig() *CTConfig {
 		CensysUrl:      flag.String("censysUrl", "", "URL to a Censys.io certificate json dump"),
 		CensysStdin:    flag.Bool("censysStdin", false, "Read a Censys.io json dump from stdin"),
 		DbConnect:      flag.String("dbConnect", "", "DB Connection String"),
-		Verbose:        flag.Bool("v", false, "verbose output"),
+		Verbose:        flag.Bool("v", false, "Give verbose output"),
 		CertPath:       flag.String("certPath", "", "Path under which to store full DER-encoded certificates"),
 		CertsPerFolder: flag.Uint64("certsPerFolder", 16384, "Certificates per folder, when stored"),
 		Offset:         flag.Uint64("offset", 0, "offset from the beginning"),
@@ -44,6 +46,8 @@ func NewCTConfig() *CTConfig {
 		GeoipDbPath:    flag.String("geoipDbPath", "", "Path to GeoIP2-City.mmdb"),
 		NumThreads:     flag.Int("numThreads", 1, "Use this many threads per CPU"),
 		HistoricalDays: flag.Int("histDays", 90, "Update this many days of historical data"),
+		RunForever:     flag.Bool("forever", false, "Run forever"),
+		PollingDelay:   flag.Int("pollingDelay", 10, "Wait this many minutes between polls"),
 	}
 
 	iniflags.Parse()

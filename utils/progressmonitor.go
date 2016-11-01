@@ -9,6 +9,8 @@ import (
 )
 
 type OperationStatus struct {
+	// Identifier of this Status Update
+	Identifier string
 	// Start contains the requested starting index of the operation.
 	Start uint64
 	// Current contains the greatest index that has been processed.
@@ -54,7 +56,7 @@ func (pm *ProgressMonitor) String() string {
 	return pm.cachedString
 }
 
-func (pm *ProgressMonitor) UpdateCount(newCount uint64) error {
+func (pm *ProgressMonitor) UpdateCount(identifier string, newCount uint64) error {
 	nowTime := time.Now()
 	countChange := newCount - pm.lastCount
 
@@ -70,7 +72,7 @@ func (pm *ProgressMonitor) UpdateCount(newCount uint64) error {
 	return nil
 }
 
-func (pm *ProgressMonitor) UpdateLength(newLength uint64) error {
+func (pm *ProgressMonitor) UpdateLength(identifier string, newLength uint64) error {
 	pm.length = newLength
 	return nil
 }
@@ -93,8 +95,8 @@ func NewProgressDisplay() *ProgressDisplay {
 	}
 }
 
-func (pd *ProgressDisplay) UpdateProgress(start uint64, index uint64, upTo uint64) {
-	pd.statusChan <- OperationStatus{start, index, upTo}
+func (pd *ProgressDisplay) UpdateProgress(identifier string, start uint64, index uint64, upTo uint64) {
+	pd.statusChan <- OperationStatus{identifier, start, index, upTo}
 }
 
 func (pd *ProgressDisplay) Close() {
@@ -137,8 +139,8 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 				}
 
 				// Track speed statistics
-				progressMonitor.UpdateCount(status.Current)
-				progressMonitor.UpdateLength(status.Length)
+				progressMonitor.UpdateCount(status.Identifier, status.Current)
+				progressMonitor.UpdateLength(status.Identifier, status.Length)
 			case <-ticker.C:
 				symbolIndex = (symbolIndex + 1) % len(symbols)
 			}

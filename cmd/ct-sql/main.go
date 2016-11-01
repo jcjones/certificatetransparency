@@ -149,7 +149,7 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 
 	index := start
 	for index < upTo {
-		ld.Display.UpdateProgress(start, index, upTo)
+		ld.Display.UpdateProgress(fmt.Sprintf("%d", logID), start, index, upTo)
 
 		max := index + 2000
 		if max >= upTo {
@@ -251,7 +251,7 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 				}
 			}
 
-			display.UpdateProgress(startOffset, ent.Offset, maxOffset)
+			display.UpdateProgress("importer", startOffset, ent.Offset, maxOffset)
 		}
 		entryChan <- *ent
 	}
@@ -342,7 +342,15 @@ func main() {
 			logDownloader.DownloaderWaitGroup.Add(1)
 			go func() {
 				defer logDownloader.DownloaderWaitGroup.Done()
-				logDownloader.Download(ctLogUrl)
+				for {
+					logDownloader.Download(ctLogUrl)
+					if !*config.RunForever {
+						return
+					}
+					sleepTime := time.Duration(*config.PollingDelay) * time.Minute
+					log.Printf("[%s] Completed. Polling again in %s.\n", ctLogUrl.String(), sleepTime)
+					time.Sleep(sleepTime)
+				}
 			}()
 
 		}
