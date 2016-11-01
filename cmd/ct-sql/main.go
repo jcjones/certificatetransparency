@@ -33,83 +33,6 @@ var (
 	config = utils.NewCTConfig()
 )
 
-// OperationStatus contains the current state of a large operation (i.e.
-// download or tree hash).
-type OperationStatus struct {
-	// Start contains the requested starting index of the operation.
-	Start uint64
-	// Current contains the greatest index that has been processed.
-	Current uint64
-	// Length contains the total number of entries.
-	Length uint64
-}
-
-func (status OperationStatus) Percentage() float32 {
-	total := float32(status.Length - status.Start)
-	done := float32(status.Current - status.Start)
-
-	if total == 0 {
-		return 100
-	}
-	return done * 100 / total
-}
-
-func clearLine() {
-	fmt.Printf("\x1b[80D\x1b[2K")
-}
-
-func displayProgress(statusChan chan OperationStatus, wg *sync.WaitGroup) {
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		symbols := []string{"|", "/", "-", "\\"}
-		symbolIndex := 0
-
-		status, ok := <-statusChan
-		if !ok {
-			return
-		}
-
-		ticker := time.NewTicker(200 * time.Millisecond)
-		defer ticker.Stop()
-
-		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm") || strings.Contains(os.Getenv("TERM"), "screen")
-
-		if !isInteractive {
-			ticker.Stop()
-		}
-
-		// Speed statistics
-		progressMonitor := utils.NewProgressMonitor()
-
-		for {
-			select {
-			case status, ok = <-statusChan:
-				if !ok {
-					return
-				}
-
-				// Track speed statistics
-				progressMonitor.UpdateCount(status.Current)
-				progressMonitor.UpdateLength(status.Length)
-			case <-ticker.C:
-				symbolIndex = (symbolIndex + 1) % len(symbols)
-			}
-
-			// Display the line
-			statusLine := fmt.Sprintf("%.1f%% (%d of %d) Rate: %s", status.Percentage(), status.Current, status.Length, progressMonitor)
-
-			if isInteractive {
-				clearLine()
-				fmt.Printf("%s %s", symbols[symbolIndex], statusLine)
-			} else {
-				fmt.Println(statusLine)
-			}
-		}
-	}()
-}
-
 type CtLogEntry struct {
 	LogEntry *ct.LogEntry
 	LogID    int
@@ -118,7 +41,7 @@ type CtLogEntry struct {
 type LogDownloader struct {
 	Database            *sqldb.EntriesDatabase
 	EntryChan           chan CtLogEntry
-	StatusChan          chan OperationStatus
+	Display             *utils.ProgressDisplay
 	ThreadWaitGroup     *sync.WaitGroup
 	DownloaderWaitGroup *sync.WaitGroup
 }
@@ -127,7 +50,7 @@ func NewLogDownloader(db *sqldb.EntriesDatabase) *LogDownloader {
 	return &LogDownloader{
 		Database:            db,
 		EntryChan:           make(chan CtLogEntry, 25),
-		StatusChan:          make(chan OperationStatus, 1),
+		Display:             utils.NewProgressDisplay(),
 		ThreadWaitGroup:     new(sync.WaitGroup),
 		DownloaderWaitGroup: new(sync.WaitGroup),
 	}
@@ -140,15 +63,9 @@ func (ld *LogDownloader) StartThreads() {
 	}
 }
 
-func (ld *LogDownloader) StartProgressDisplay() {
-	displayProgress(ld.StatusChan, ld.ThreadWaitGroup)
-}
-
 func (ld *LogDownloader) Stop() {
 	close(ld.EntryChan)
-	if ld.StatusChan != nil {
-		close(ld.StatusChan)
-	}
+	ld.Display.Close()
 }
 
 func (ld *LogDownloader) Download(ctLogUrl url.URL) {
@@ -232,9 +149,7 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 
 	index := start
 	for index < upTo {
-		if ld.StatusChan != nil {
-			ld.StatusChan <- OperationStatus{start, index, upTo}
-		}
+		ld.Display.UpdateProgress(start, index, upTo)
 
 		max := index + 2000
 		if max >= upTo {
@@ -279,12 +194,13 @@ func (ld *LogDownloader) insertCTWorker() {
 func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
 	entryChan := make(chan censysdata.CensysEntry, 100)
 	defer close(entryChan)
-	statusChan := make(chan OperationStatus, 1)
-	defer close(statusChan)
 	wg.Add(1)
 	defer wg.Done()
 
-	displayProgress(statusChan, wg)
+	display := utils.NewProgressDisplay()
+	display.StartDisplay(wg)
+	defer display.Close()
+
 	numWorkers := *config.NumThreads * runtime.NumCPU()
 	for i := 0; i < numWorkers; i++ {
 		go insertCensysWorker(entryChan, db, wg)
@@ -335,7 +251,7 @@ func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg
 				}
 			}
 
-			statusChan <- OperationStatus{startOffset, ent.Offset, maxOffset}
+			display.UpdateProgress(startOffset, ent.Offset, maxOffset)
 		}
 		entryChan <- *ent
 	}
@@ -417,7 +333,7 @@ func main() {
 
 	if len(logUrls) > 0 {
 		logDownloader := NewLogDownloader(entriesDb)
-		logDownloader.StartProgressDisplay()
+		logDownloader.Display.StartDisplay(logDownloader.ThreadWaitGroup)
 		logDownloader.StartThreads()
 
 		for _, ctLogUrl := range logUrls {
@@ -435,7 +351,6 @@ func main() {
 
 		logDownloader.Stop()                 // Stop workers
 		logDownloader.ThreadWaitGroup.Wait() // Wait for workers to stop
-		clearLine()
 		os.Exit(0)
 	}
 

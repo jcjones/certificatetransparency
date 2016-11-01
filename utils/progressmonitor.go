@@ -130,6 +130,9 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 			select {
 			case status, ok = <-pd.statusChan:
 				if !ok {
+					if isInteractive {
+						clearLine()
+					}
 					return
 				}
 
