@@ -65,13 +65,7 @@ func (pm *ProgressMonitor) getTimeRemaining() time.Duration {
 }
 
 func (pm *ProgressMonitor) CurrentPercentage() float64 {
-	var completed uint64
-	var total uint64
-	for _, op := range pm.operations {
-		completed += op.lastCount
-		total += op.length
-	}
-	return float64(completed) / float64(total)
+	return float64(pm.CurrentPosition()) / float64(pm.CurrentLength()) * 100.0
 }
 
 func (pm *ProgressMonitor) CurrentPosition() uint64 {
