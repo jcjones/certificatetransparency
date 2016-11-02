@@ -27,6 +27,7 @@ import (
 	"github.com/jcjones/ct-sql/censysdata"
 	"github.com/jcjones/ct-sql/sqldb"
 	"github.com/jcjones/ct-sql/utils"
+	"github.com/jpillora/backoff"
 )
 
 var (
@@ -44,6 +45,7 @@ type LogDownloader struct {
 	Display             *utils.ProgressDisplay
 	ThreadWaitGroup     *sync.WaitGroup
 	DownloaderWaitGroup *sync.WaitGroup
+	Backoff             *backoff.Backoff
 }
 
 func NewLogDownloader(db *sqldb.EntriesDatabase) *LogDownloader {
@@ -53,6 +55,11 @@ func NewLogDownloader(db *sqldb.EntriesDatabase) *LogDownloader {
 		Display:             utils.NewProgressDisplay(),
 		ThreadWaitGroup:     new(sync.WaitGroup),
 		DownloaderWaitGroup: new(sync.WaitGroup),
+		Backoff: &backoff.Backoff{
+			Min:    10 * time.Millisecond,
+			Max:    1 * time.Second,
+			Jitter: true,
+		},
 	}
 }
 
@@ -165,19 +172,24 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 			return index, lastTime, err
 		}
 
-		for _, ent := range rawEnts {
+		for arrayOffset := 0; arrayOffset < len(rawEnts); {
+			ent := rawEnts[arrayOffset]
 			// Are there waiting signals?
 			select {
 			case sig := <-sigChan:
 				return index, lastTime, fmt.Errorf("Signal caught: %s", sig)
-			default:
-				ld.EntryChan <- CtLogEntry{&ent, logID}
+			case ld.EntryChan <- CtLogEntry{&ent, logID}:
 				lastTime = ent.Leaf.TimestampedEntry.Timestamp
 				if uint64(ent.Index) != index {
 					return index, lastTime, fmt.Errorf("Index mismatch, local: %v, remote: %v", index, ent.Index)
 				}
 
 				index++
+				arrayOffset++
+				ld.Backoff.Reset()
+			default:
+				// Channel full, retry
+				time.Sleep(ld.Backoff.Duration())
 			}
 		}
 	}
