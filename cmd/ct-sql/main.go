@@ -157,12 +157,13 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 	defer signal.Stop(sigChan)
 	defer close(sigChan)
 
+	progressTicker := time.NewTicker(10 * time.Second)
+	defer progressTicker.Stop()
+
 	var lastTime uint64
 
 	index := start
 	for index < upTo {
-		ld.Display.UpdateProgress(fmt.Sprintf("%d", logID), start, index, upTo)
-
 		max := index + 2000
 		if max >= upTo {
 			max = upTo - 1
@@ -187,6 +188,8 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 				index++
 				arrayOffset++
 				ld.Backoff.Reset()
+			case <- progressTicker.C:
+				ld.Display.UpdateProgress(fmt.Sprintf("%d", logID), start, index, upTo)
 			default:
 				// Channel full, retry
 				time.Sleep(ld.Backoff.Duration())

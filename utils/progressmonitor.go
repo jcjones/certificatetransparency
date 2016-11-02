@@ -165,17 +165,17 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 			return
 		}
 
-		symbolTicker := time.NewTicker(200 * time.Millisecond)
-		defer symbolTicker.Stop()
-
-		printTicker := time.NewTicker(1 * time.Minute)
-		defer printTicker.Stop()
-
 		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm") || strings.Contains(os.Getenv("TERM"), "screen")
 
-		if !isInteractive {
-			symbolTicker.Stop()
+		var tickSpeed time.Duration
+		if isInteractive {
+			tickSpeed = 200 * time.Millisecond
+		} else {
+			tickSpeed = 1 * time.Minute
 		}
+
+		printTicker := time.NewTicker(tickSpeed)
+		defer printTicker.Stop()
 
 		// Speed statistics
 		progressMonitor := NewProgressMonitor()
@@ -194,19 +194,16 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 				// Track speed statistics
 				progressMonitor.UpdateCount(status.Identifier, status.Current-status.Start)
 				progressMonitor.UpdateLength(status.Identifier, status.Length-status.Start)
-			case <-symbolTicker.C:
-				symbolIndex = (symbolIndex + 1) % len(symbols)
 			case <-printTicker.C:
-				// Fall through to displaying the line
+				if isInteractive {
+					clearLine()
+					symbolIndex = (symbolIndex + 1) % len(symbols)
+					fmt.Printf("%s %s", symbols[symbolIndex], progressMonitor)
+				} else {
+					fmt.Printf("%s\n", progressMonitor)
+				}
 			}
 
-			// Display the line
-			if isInteractive {
-				clearLine()
-				fmt.Printf("%s %s", symbols[symbolIndex], progressMonitor)
-			} else {
-				fmt.Printf("%s\n", progressMonitor)
-			}
 		}
 	}()
 }
