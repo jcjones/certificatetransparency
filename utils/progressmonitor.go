@@ -165,13 +165,16 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 			return
 		}
 
-		ticker := time.NewTicker(200 * time.Millisecond)
-		defer ticker.Stop()
+		symbolTicker := time.NewTicker(200 * time.Millisecond)
+		defer symbolTicker.Stop()
+
+		printTicker := time.NewTicker(1 * time.Minute)
+		defer printTicker.Stop()
 
 		isInteractive := strings.Contains(os.Getenv("TERM"), "xterm") || strings.Contains(os.Getenv("TERM"), "screen")
 
 		if !isInteractive {
-			ticker.Stop()
+			symbolTicker.Stop()
 		}
 
 		// Speed statistics
@@ -181,6 +184,7 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 			select {
 			case status, ok = <-pd.statusChan:
 				if !ok {
+					// Channel closed
 					if isInteractive {
 						clearLine()
 					}
@@ -190,8 +194,10 @@ func (pd *ProgressDisplay) StartDisplay(wg *sync.WaitGroup) {
 				// Track speed statistics
 				progressMonitor.UpdateCount(status.Identifier, status.Current-status.Start)
 				progressMonitor.UpdateLength(status.Identifier, status.Length-status.Start)
-			case <-ticker.C:
+			case <-symbolTicker.C:
 				symbolIndex = (symbolIndex + 1) % len(symbols)
+			case <-printTicker.C:
+				// Fall through to displaying the line
 			}
 
 			// Display the line
