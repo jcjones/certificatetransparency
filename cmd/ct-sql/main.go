@@ -188,7 +188,7 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 				index++
 				arrayOffset++
 				ld.Backoff.Reset()
-			case <- progressTicker.C:
+			case <-progressTicker.C:
 				ld.Display.UpdateProgress(fmt.Sprintf("%d", logID), start, index, upTo)
 			default:
 				// Channel full, retry
@@ -323,9 +323,13 @@ func main() {
 
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
-	entriesDb := &sqldb.EntriesDatabase{DbMap: dbMap,
-		Verbose: *config.Verbose, FullCerts: certFolderDB,
-		KnownIssuers: make(map[string]int)}
+	entriesDb := &sqldb.EntriesDatabase{
+		DbMap:        dbMap,
+		SQLDebug:     *config.SQLDebug,
+		Verbose:      *config.Verbose,
+		FullCerts:    certFolderDB,
+		KnownIssuers: make(map[string]int),
+	}
 	err = entriesDb.InitTables()
 	if err != nil {
 		log.Fatalf("unable to prepare SQL: %s: %s", dbConnectStr, err)

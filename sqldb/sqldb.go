@@ -128,6 +128,7 @@ func errorIsNotDuplicate(err error) bool {
 
 type EntriesDatabase struct {
 	DbMap        *gorp.DbMap
+	SQLDebug     bool
 	Verbose      bool
 	FullCerts    *utils.FolderDatabase
 	IssuerFilter *string
@@ -182,7 +183,7 @@ func RecombineURLForDB(dbConnect string) (string, error) {
 }
 
 func (edb *EntriesDatabase) InitTables() error {
-	if edb.Verbose {
+	if edb.SQLDebug {
 		edb.DbMap.TraceOn("[gorp]", log.New(os.Stdout, "myapp:", log.Lmicroseconds))
 	}
 

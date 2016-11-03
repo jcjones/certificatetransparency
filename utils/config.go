@@ -17,6 +17,7 @@ type CTConfig struct {
 	CensysStdin    *bool
 	DbConnect      *string
 	Verbose        *bool
+	SQLDebug       *bool
 	CertPath       *string
 	CertsPerFolder *uint64
 	Offset         *uint64
@@ -38,6 +39,7 @@ func NewCTConfig() *CTConfig {
 		CensysStdin:    flag.Bool("censysStdin", false, "Read a Censys.io json dump from stdin"),
 		DbConnect:      flag.String("dbConnect", "", "DB Connection String"),
 		Verbose:        flag.Bool("v", false, "Give verbose output"),
+		SQLDebug:       flag.Bool("sqldebug", false, "Give sql-debug output"),
 		CertPath:       flag.String("certPath", "", "Path under which to store full DER-encoded certificates"),
 		CertsPerFolder: flag.Uint64("certsPerFolder", 16384, "Certificates per folder, when stored"),
 		Offset:         flag.Uint64("offset", 0, "offset from the beginning"),
