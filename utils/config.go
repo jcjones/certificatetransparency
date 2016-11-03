@@ -28,6 +28,7 @@ type CTConfig struct {
 	HistoricalDays *int
 	RunForever     *bool
 	PollingDelay   *int
+	IssuerCNFilter *string
 }
 
 func NewCTConfig() *CTConfig {
@@ -50,6 +51,7 @@ func NewCTConfig() *CTConfig {
 		HistoricalDays: flag.Int("histDays", 90, "Update this many days of historical data"),
 		RunForever:     flag.Bool("forever", false, "Run forever"),
 		PollingDelay:   flag.Int("pollingDelay", 10, "Wait this many minutes between polls"),
+		IssuerCNFilter: flag.String("issuerCNList", "", "Prefixes to match for CNs for permitted issuers, comma delimited"),
 	}
 
 	iniflags.Parse()

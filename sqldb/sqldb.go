@@ -127,13 +127,13 @@ func errorIsNotDuplicate(err error) bool {
 }
 
 type EntriesDatabase struct {
-	DbMap        *gorp.DbMap
-	SQLDebug     bool
-	Verbose      bool
-	FullCerts    *utils.FolderDatabase
-	IssuerFilter *string
-	KnownIssuers map[string]int
-	IssuersLock  sync.RWMutex
+	DbMap          *gorp.DbMap
+	SQLDebug       bool
+	Verbose        bool
+	FullCerts      *utils.FolderDatabase
+	IssuerCNFilter []string
+	KnownIssuers   map[string]int
+	IssuersLock    sync.RWMutex
 }
 
 // Taken from Boulder
@@ -501,10 +501,31 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 	return nil
 }
 
+func (edb *EntriesDatabase) certIsFilteredOut(cert *x509.Certificate) bool {
+	// Skip unimportant entries, if configured
+	skip := (len(edb.IssuerCNFilter) != 0)
+	for _, filter := range edb.IssuerCNFilter {
+		if strings.HasPrefix(cert.Issuer.CommonName, filter) {
+			skip = false
+			break
+		}
+	}
+
+	if skip && edb.Verbose {
+		fmt.Printf("Skipping inserting cert issued by %s\n", cert.Issuer.CommonName)
+	}
+
+	return skip
+}
+
 func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) error {
 	cert, err := x509.ParseCertificate(entry.CertBytes)
 	if err != nil {
 		return err
+	}
+
+	if edb.certIsFilteredOut(cert) {
+		return nil
 	}
 
 	txn, certId, err := edb.insertCertificate(cert)
@@ -549,8 +570,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 		return err
 	}
 
-	// Skip unimportant entries, if configured
-	if edb.IssuerFilter != nil && !strings.HasPrefix(cert.Issuer.CommonName, *edb.IssuerFilter) {
+	if edb.certIsFilteredOut(cert) {
 		return nil
 	}
 

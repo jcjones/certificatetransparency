@@ -321,14 +321,25 @@ func main() {
 		}
 	}
 
+	var issuerCNList []string
+	if config.IssuerCNFilter != nil && len(*config.IssuerCNFilter) > 0 {
+		for _, part := range strings.Split(*config.IssuerCNFilter, ",") {
+			cnFilter := strings.TrimSpace(part)
+			if len(cnFilter) > 0 {
+				issuerCNList = append(issuerCNList, cnFilter)
+			}
+		}
+	}
+
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	entriesDb := &sqldb.EntriesDatabase{
-		DbMap:        dbMap,
-		SQLDebug:     *config.SQLDebug,
-		Verbose:      *config.Verbose,
-		FullCerts:    certFolderDB,
-		KnownIssuers: make(map[string]int),
+		DbMap:          dbMap,
+		SQLDebug:       *config.SQLDebug,
+		Verbose:        *config.Verbose,
+		FullCerts:      certFolderDB,
+		KnownIssuers:   make(map[string]int),
+		IssuerCNFilter: issuerCNList,
 	}
 	err = entriesDb.InitTables()
 	if err != nil {
