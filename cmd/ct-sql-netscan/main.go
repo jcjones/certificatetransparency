@@ -6,12 +6,15 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -56,8 +59,12 @@ func main() {
 
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
-	entriesDb := &sqldb.EntriesDatabase{DbMap: dbMap,
-		Verbose: *config.Verbose, KnownIssuers: make(map[string]int)}
+	entriesDb := &sqldb.EntriesDatabase{
+		DbMap:        dbMap,
+		SQLDebug:     *config.SQLDebug,
+		Verbose:      *config.Verbose,
+		KnownIssuers: make(map[string]int),
+	}
 	err = entriesDb.InitTables()
 	if err != nil {
 		log.Fatalf("unable to prepare SQL DB. dbConnectStr=%s: %s", dbConnectStr, err)
@@ -169,6 +176,11 @@ func (ns *NetScan) processEntries(entries []ResolutionEntry) error {
 	progressDisplay := utils.NewProgressDisplay()
 	defer progressDisplay.Close()
 
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigChan)
+	defer close(sigChan)
+
 	progressDisplay.StartDisplay(ns.wg)
 
 	numWorkers := *config.NumThreads * runtime.NumCPU()
@@ -177,9 +189,13 @@ func (ns *NetScan) processEntries(entries []ResolutionEntry) error {
 	}
 
 	for i, entry := range entries {
-		entryChan <- entry
-		if i%256 == 0 {
-			progressDisplay.UpdateProgress("Scanner", 0, uint64(i), uint64(len(entries)))
+		select {
+		case entryChan <- entry:
+			if i%256 == 0 {
+				progressDisplay.UpdateProgress("Scanner", 0, uint64(i), uint64(len(entries)))
+			}
+		case sig := <-sigChan:
+			return fmt.Errorf("Signal caught: %s", sig)
 		}
 	}
 
