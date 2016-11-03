@@ -51,7 +51,7 @@ type LogDownloader struct {
 func NewLogDownloader(db *sqldb.EntriesDatabase) *LogDownloader {
 	return &LogDownloader{
 		Database:            db,
-		EntryChan:           make(chan CtLogEntry, 25),
+		EntryChan:           make(chan CtLogEntry),
 		Display:             utils.NewProgressDisplay(),
 		ThreadWaitGroup:     new(sync.WaitGroup),
 		DownloaderWaitGroup: new(sync.WaitGroup),
@@ -212,7 +212,7 @@ func (ld *LogDownloader) insertCTWorker() {
 }
 
 func processImporter(importer censysdata.Importer, db *sqldb.EntriesDatabase, wg *sync.WaitGroup) error {
-	entryChan := make(chan censysdata.CensysEntry, 100)
+	entryChan := make(chan censysdata.CensysEntry)
 	defer close(entryChan)
 	wg.Add(1)
 	defer wg.Done()
