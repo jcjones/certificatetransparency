@@ -293,48 +293,50 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 	// Parse the serial number
 	serialNum := fmt.Sprintf("%036x", cert.SerialNumber)
 
-	err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerID)
+	certObj := &Certificate{
+		Serial:    serialNum,
+		IssuerID:  issuerID,
+		Subject:   cert.Subject.CommonName,
+		NotBefore: cert.NotBefore.UTC(),
+		NotAfter:  cert.NotAfter.UTC(),
+	}
+
+	//
+	// Assume this is a new certificate, so we need to add it to the certificate DB
+	// as well as pull out its metadata
+	//
+	err = txn.Insert(certObj)
+	certId = certObj.CertID
+
 	if err != nil {
-		//
-		// This is a new certificate, so we need to add it to the certificate DB
-		// as well as pull out its metadata
-		//
-
-		if edb.Verbose {
-			fmt.Println(fmt.Sprintf("Processing %s %#v", serialNum, cert.Subject.CommonName))
-		}
-
-		certObj := &Certificate{
-			Serial:    serialNum,
-			IssuerID:  issuerID,
-			Subject:   cert.Subject.CommonName,
-			NotBefore: cert.NotBefore.UTC(),
-			NotAfter:  cert.NotAfter.UTC(),
-		}
-		err = txn.Insert(certObj)
-		if err != nil {
+		if errorIsNotDuplicate(err) {
 			return txn, 0, fmt.Errorf("DB error on cert insertion: %#v: %s", certObj, err)
 		}
 
-		certId = certObj.CertID
-
-		if certId == 0 {
-			// Can't continue, so abort
-			return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate serial=%s obj=%+v", serialNum, certObj)
+		// Otherwise, it's a duplicate.
+		err = txn.SelectOne(&certId, "SELECT certID FROM certificate WHERE serial = ? AND issuerID = ?", serialNum, issuerID)
+		if err != nil {
+			return txn, 0, fmt.Errorf("Unexpected error finding a certificate after getting an insertion error: %#v: %s", certObj, err)
 		}
+	}
 
-		// Insert the certificate into the unexpired_certificates table, if it is unexpired
-		if cert.NotBefore.Before(time.Now()) && cert.NotAfter.After(time.Now()) {
-			unexpiredObj := &UnexpiredCertificate{
-				CertID:    certId,
-				IssuerID:  issuerID,
-				NotBefore: cert.NotBefore.UTC().Format("2006-01-02"),
-				NotAfter:  cert.NotAfter.UTC().Format("2006-01-02"),
-			}
-			err = txn.Insert(unexpiredObj)
-			if err != nil {
-				return txn, 0, fmt.Errorf("DB error on unexpired cert insertion: %#v: %s", unexpiredObj, err)
-			}
+	// At this point we should have a CertID, otherwise abort
+	if certId == 0 {
+		return txn, 0, fmt.Errorf("Failed to obtain a certId for certificate serial=%s obj=%+v", serialNum, certObj)
+	}
+
+	// Insert the certificate into the unexpired_certificates table, if it is unexpired
+	if cert.NotBefore.Before(time.Now()) && cert.NotAfter.After(time.Now()) {
+		unexpiredObj := &UnexpiredCertificate{
+			CertID:    certId,
+			IssuerID:  issuerID,
+			NotBefore: cert.NotBefore.UTC().Format("2006-01-02"),
+			NotAfter:  cert.NotAfter.UTC().Format("2006-01-02"),
+		}
+		err = txn.Insert(unexpiredObj)
+		if errorIsNotDuplicate(err) {
+			// Duplicate errors are no big
+			return txn, 0, fmt.Errorf("DB error on unexpired cert insertion: %#v: %s", unexpiredObj, err)
 		}
 	}
 
@@ -394,35 +396,82 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) (uint64, error) {
 	var nameId uint64
-	err := txn.SelectOne(&nameId, "SELECT nameID FROM fqdn WHERE name = ? LIMIT 1", fqdn)
+
+	// Assume it doesn't exist, so let's try inserting it
+	fqdnObj := &FQDN{
+		Name: fqdn,
+	}
+
+	err := txn.Insert(fqdnObj)
+	nameId = fqdnObj.NameID
 	if err != nil {
-		// Didn't exist, so let's insert it
-		fqdnObj := &FQDN{
-			Name: fqdn,
-		}
-		err = txn.Insert(fqdnObj)
-		if err != nil {
+		if errorIsNotDuplicate(err) {
+			// That's bad.
 			return 0, err
 		}
 
-		nameId = fqdnObj.NameID
-
-		// Add to netscan queue
-		queueObj := &NetscanQueue{
-			NameID:    nameId,
-			TimeAdded: time.Now(),
-		}
-		err = txn.Insert(queueObj)
+		// OK, it's a duplicate. Find it.
+		err = txn.SelectOne(&nameId, "SELECT nameID FROM fqdn WHERE name = ? LIMIT 1", fqdn)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("Unexpected error finding a FQDN after getting an insertion error: %#v: %s", fqdnObj, err)
 		}
 	}
 
 	if nameId == 0 {
-		err = fmt.Errorf("Failed to obtain NameID")
+		return 0, fmt.Errorf("Failed to obtain NameID")
+	}
+
+	// Add to netscan queue
+	queueObj := &NetscanQueue{
+		NameID:    nameId,
+		TimeAdded: time.Now(),
+	}
+	err = txn.Insert(queueObj)
+	if err != nil {
+		return 0, err
 	}
 
 	return nameId, err
+}
+
+func (edb *EntriesDatabase) insertRegisteredDomain(txn *gorp.Transaction, certId uint64, domain, etld, label string) error {
+	var regdomId uint64
+
+	// Assume it doesn't exist, so let's try inserting it
+	domainObj := &RegisteredDomain{
+		Domain: domain,
+		ETLD:   etld,
+		Label:  label,
+	}
+
+	err := txn.Insert(domainObj)
+	regdomId = domainObj.RegDomID
+	if err != nil {
+		if errorIsNotDuplicate(err) {
+			// That's bad.
+			return err
+		}
+
+		err := txn.SelectOne(&regdomId, "SELECT regdomID FROM registereddomain WHERE domain = ? LIMIT 1", domain)
+		if err != nil {
+			return fmt.Errorf("Unexpected error finding a Registered Domain after getting an insertion error: %#v: %s", domainObj, err)
+		}
+	}
+
+	if regdomId == 0 {
+		return fmt.Errorf("Failed to obtain RegdomId")
+	}
+
+	certRegDomObj := &CertToRegisteredDomain{
+		RegDomID: regdomId,
+		CertID:   certId,
+	}
+	// Ignore errors on insert
+	err = txn.Insert(certRegDomObj)
+	if errorIsNotDuplicate(err) {
+		return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
+	}
+	return nil
 }
 
 func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certId uint64, names map[string]struct{}) error {
@@ -433,39 +482,19 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 			// This is non-critical. We'd rather have the cert with an incomplete
 			// eTLD, so mask this error
 			if edb.Verbose {
-				fmt.Printf("%s\n", err)
+				log.Printf("insertRegisteredDomains: CertId=%d  Err=%s\n", certId, err)
 			}
 			continue
 		}
 		domains[domain] = struct{}{}
 	}
+
 	for domain, _ := range domains {
 		etld, _ := publicsuffix.PublicSuffix(domain)
 		label := strings.Replace(domain, "."+etld, "", 1)
 
-		var regdomId uint64
-		err := txn.SelectOne(&regdomId, "SELECT regdomID FROM registereddomain WHERE domain = ? LIMIT 1", domain)
+		err := edb.insertRegisteredDomain(txn, certId, domain, etld, label)
 		if err != nil {
-			domainObj := &RegisteredDomain{
-				Domain: domain,
-				ETLD:   etld,
-				Label:  label,
-			}
-			// Ignore errors on insert
-			err := txn.Insert(domainObj)
-			if errorIsNotDuplicate(err) {
-				return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
-			}
-			regdomId = domainObj.RegDomID
-		}
-
-		certRegDomObj := &CertToRegisteredDomain{
-			RegDomID: regdomId,
-			CertID:   certId,
-		}
-		// Ignore errors on insert
-		err = txn.Insert(certRegDomObj)
-		if errorIsNotDuplicate(err) {
 			return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
 		}
 	}
