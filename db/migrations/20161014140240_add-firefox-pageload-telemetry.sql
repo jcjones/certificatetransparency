@@ -2,7 +2,7 @@
 -- +goose Up
 -- SQL in section 'Up' is executed when this migration is applied
 
-CREATE TABLE `firefoxpageloadstls` (
+CREATE TABLE IF NOT EXISTS `firefoxpageloadstls` (
   `datestamp` date,
   `countTLS` int unsigned,
   `countPageloads` int unsigned,

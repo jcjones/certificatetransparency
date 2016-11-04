@@ -24,7 +24,7 @@ CREATE TABLE `fqdn` (
   UNIQUE KEY `NameIdx` (`name`) USING HASH
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE TABLE `issuer` (
+CREATE TABLE IF NOT EXISTS `issuer` (
   `issuerID` int(11) NOT NULL AUTO_INCREMENT,
   `commonName` varchar(255) DEFAULT NULL,
   `authorityKeyID` varchar(255) DEFAULT NULL,
