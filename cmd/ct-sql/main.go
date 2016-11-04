@@ -164,7 +164,7 @@ func (ld *LogDownloader) DownloadCTRangeToChannel(logID int, ctLog *client.LogCl
 
 	index := start
 	for index < upTo {
-		max := index + 2000
+		max := index + 1024
 		if max >= upTo {
 			max = upTo - 1
 		}

@@ -382,7 +382,7 @@ func (edb *EntriesDatabase) insertCertificate(cert *x509.Certificate) (*gorp.Tra
 
 		err = txn.Insert(certNameObj)
 		if errorIsNotDuplicate(err) {
-			return txn, certId, fmt.Errorf("DB error on FQDN: %s: %s", name, err)
+			return txn, certId, fmt.Errorf("DB error on FQDN: %s: %s -- object: %+v", name, err, certNameObj)
 		}
 	}
 
@@ -426,12 +426,7 @@ func (edb *EntriesDatabase) getOrInsertName(txn *gorp.Transaction, fqdn string) 
 		NameID:    nameId,
 		TimeAdded: time.Now(),
 	}
-	err = txn.Insert(queueObj)
-	if err != nil {
-		return 0, err
-	}
-
-	return nameId, err
+	return nameId, txn.Insert(queueObj)
 }
 
 func (edb *EntriesDatabase) insertRegisteredDomain(txn *gorp.Transaction, certId uint64, domain, etld, label string) error {
@@ -511,9 +506,9 @@ func (edb *EntriesDatabase) certIsFilteredOut(cert *x509.Certificate) bool {
 		}
 	}
 
-	if skip && edb.Verbose {
-		fmt.Printf("Skipping inserting cert issued by %s\n", cert.Issuer.CommonName)
-	}
+	// if skip && edb.Verbose {
+	// 	fmt.Printf("Skipping inserting cert issued by %s\n", cert.Issuer.CommonName)
+	// }
 
 	return skip
 }
