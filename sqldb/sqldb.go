@@ -127,13 +127,15 @@ func errorIsNotDuplicate(err error) bool {
 }
 
 type EntriesDatabase struct {
-	DbMap          *gorp.DbMap
-	SQLDebug       bool
-	Verbose        bool
-	FullCerts      *utils.FolderDatabase
-	IssuerCNFilter []string
-	KnownIssuers   map[string]int
-	IssuersLock    sync.RWMutex
+	DbMap               *gorp.DbMap
+	SQLDebug            bool
+	Verbose             bool
+	FullCerts           *utils.FolderDatabase
+	IssuerCNFilter      []string
+	KnownIssuers        map[string]int
+	IssuersLock         sync.RWMutex
+	EarliestDateFilter  time.Time
+	CorrelateLogEntries bool
 }
 
 // Taken from Boulder
@@ -498,6 +500,11 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 
 func (edb *EntriesDatabase) certIsFilteredOut(cert *x509.Certificate) bool {
 	// Skip unimportant entries, if configured
+
+	if !edb.EarliestDateFilter.IsZero() && cert.NotBefore.Before(edb.EarliestDateFilter) {
+		return true
+	}
+
 	skip := (len(edb.IssuerCNFilter) != 0)
 	for _, filter := range edb.IssuerCNFilter {
 		if strings.HasPrefix(cert.Issuer.CommonName, filter) {
@@ -586,20 +593,21 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 			continue
 		}
 
-		//
-		// Insert the appropriate CertificateLogEntry, ignoring errors if there was a collision
-		//
-
-		certLogEntry := &CertificateLogEntry{
-			CertID:    certID,
-			LogID:     logID,
-			EntryID:   uint64(entry.Index),
-			EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
-		}
-		err = txn.Insert(certLogEntry)
-		if errorIsNotDuplicate(err) {
-			txn.Rollback()
-			continue
+		if edb.CorrelateLogEntries {
+			//
+			// Insert the appropriate CertificateLogEntry, ignoring errors if there was a collision
+			//
+			certLogEntry := &CertificateLogEntry{
+				CertID:    certID,
+				LogID:     logID,
+				EntryID:   uint64(entry.Index),
+				EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
+			}
+			err = txn.Insert(certLogEntry)
+			if errorIsNotDuplicate(err) {
+				txn.Rollback()
+				continue
+			}
 		}
 
 		return txn.Commit()

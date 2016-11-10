@@ -331,15 +331,22 @@ func main() {
 		}
 	}
 
+	earliestDate, err := time.Parse("2006-01-02", *config.EarliestDateFilter)
+	if err != nil {
+		log.Fatalf("unable to parse EarliestDateFilter: %s: %s", *config.EarliestDateFilter, err)
+	}
+
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
 	dbMap := &gorp.DbMap{Db: db, Dialect: dialect}
 	entriesDb := &sqldb.EntriesDatabase{
-		DbMap:          dbMap,
-		SQLDebug:       *config.SQLDebug,
-		Verbose:        *config.Verbose,
-		FullCerts:      certFolderDB,
-		KnownIssuers:   make(map[string]int),
-		IssuerCNFilter: issuerCNList,
+		DbMap:               dbMap,
+		SQLDebug:            *config.SQLDebug,
+		Verbose:             *config.Verbose,
+		FullCerts:           certFolderDB,
+		KnownIssuers:        make(map[string]int),
+		IssuerCNFilter:      issuerCNList,
+		EarliestDateFilter:  earliestDate,
+		CorrelateLogEntries: *config.CorrelateLogEntries,
 	}
 	err = entriesDb.InitTables()
 	if err != nil {
