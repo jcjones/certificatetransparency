@@ -331,9 +331,12 @@ func main() {
 		}
 	}
 
-	earliestDate, err := time.Parse("2006-01-02", *config.EarliestDateFilter)
-	if err != nil {
-		log.Fatalf("unable to parse EarliestDateFilter: %s: %s", *config.EarliestDateFilter, err)
+	var earliestDate time.Time
+	if config.EarliestDateFilter != nil && len(*config.EarliestDateFilter) > 1 {
+		earliestDate, err = time.Parse("2006-01-02", *config.EarliestDateFilter)
+		if err != nil {
+			log.Fatalf("unable to parse EarliestDateFilter: %s: %s", *config.EarliestDateFilter, err)
+		}
 	}
 
 	dialect := gorp.MySQLDialect{Engine: "InnoDB", Encoding: "UTF8"}
