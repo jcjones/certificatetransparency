@@ -350,6 +350,7 @@ func main() {
 		IssuerCNFilter:      issuerCNList,
 		EarliestDateFilter:  earliestDate,
 		CorrelateLogEntries: *config.CorrelateLogEntries,
+		LogExpiredEntries:   *config.LogExpiredEntries,
 	}
 	err = entriesDb.InitTables()
 	if err != nil {

@@ -31,6 +31,7 @@ type CTConfig struct {
 	IssuerCNFilter      *string
 	EarliestDateFilter  *string
 	CorrelateLogEntries *bool
+	LogExpiredEntries   *bool
 }
 
 func NewCTConfig() *CTConfig {
@@ -56,6 +57,7 @@ func NewCTConfig() *CTConfig {
 		IssuerCNFilter:      flag.String("issuerCNList", "", "Prefixes to match for CNs for permitted issuers, comma delimited"),
 		EarliestDateFilter:  flag.String("earliestDate", "", "Datestamp (YYYY-MM-DD) of the earliest date to accept"),
 		CorrelateLogEntries: flag.Bool("correlateLogEntries", false, "Maintain a list of what certificates were found in which logs"),
+		LogExpiredEntries:   flag.Bool("logExpiredEntries", false, "Add expired entries to the database"),
 	}
 
 	iniflags.Parse()

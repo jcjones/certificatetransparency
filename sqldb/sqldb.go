@@ -136,6 +136,7 @@ type EntriesDatabase struct {
 	IssuersLock         sync.RWMutex
 	EarliestDateFilter  time.Time
 	CorrelateLogEntries bool
+	LogExpiredEntries   bool
 }
 
 // Taken from Boulder
@@ -502,6 +503,10 @@ func (edb *EntriesDatabase) certIsFilteredOut(cert *x509.Certificate) bool {
 	// Skip unimportant entries, if configured
 
 	if !edb.EarliestDateFilter.IsZero() && cert.NotBefore.Before(edb.EarliestDateFilter) {
+		return true
+	}
+
+	if cert.NotAfter.Before(time.Now()) && !edb.LogExpiredEntries {
 		return true
 	}
 
