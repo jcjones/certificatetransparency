@@ -18,12 +18,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"golang.org/x/net/context"
 
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/go-gorp/gorp"
 	"github.com/google/certificate-transparency/go"
 	"github.com/google/certificate-transparency/go/client"
+	"github.com/google/certificate-transparency/go/jsonclient"
 	"github.com/jcjones/ct-sql/censysdata"
 	"github.com/jcjones/ct-sql/sqldb"
 	"github.com/jcjones/ct-sql/utils"
@@ -81,10 +83,14 @@ func (ld *LogDownloader) Download(ctLogUrl string) {
 		return
 	}
 
-	ctLog := client.New(ctLogUrl, nil)
+	ctLog, err := client.New(ctLogUrl, nil, jsonclient.Options{})
+	if err != nil {
+		log.Printf("[%s] Unable to construct CT log client: %s", ctLogUrl, err)
+		return
+	}
 
 	log.Printf("[%s] Fetching signed tree head... ", ctLogUrl)
-	sth, err := ctLog.GetSTH()
+	sth, err := ctLog.GetSTH(context.Background())
 	if err != nil {
 		log.Printf("[%s] Unable to fetch signed tree head: %s", ctLogUrl, err)
 		return

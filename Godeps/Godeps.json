@@ -1,0 +1,57 @@
+{
+	"ImportPath": "github.com/jcjones/ct-sql",
+	"GoVersion": "go1.6.2",
+	"Packages": [
+		"./cmd/ct-sql/",
+		"./cmd/ct-sql-netscan/",
+		"./cmd/telemetry-update/",
+		"./cmd/get-cert/"
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/go-gorp/gorp",
+			"Comment": "v1.7-180-g2f6d659",
+			"Rev": "2f6d659f47d958a61a41cf8a5512d840330901bd"
+		},
+		{
+			"ImportPath": "github.com/go-sql-driver/mysql",
+			"Comment": "v1.2-88-ga197e5d",
+			"Rev": "a197e5d40516f2e9f74dcee085a5f2d4604e94df"
+		},
+		{
+			"ImportPath": "github.com/google/certificate-transparency/go",
+			"Rev": "59647d288fd35bda8af7d18ca7a9be2feaa687e2"
+		},
+		{
+			"ImportPath": "github.com/jpillora/backoff",
+			"Rev": "2ff7c4694083b5dbd71b21fd7cb7577477a74b31"
+		},
+		{
+			"ImportPath": "github.com/oschwald/geoip2-golang",
+			"Comment": "v0.1.0-31-gb8dbdc3",
+			"Rev": "b8dbdc368b6db46de50f7eecf7a7a31b4822aa00"
+		},
+		{
+			"ImportPath": "github.com/oschwald/maxminddb-golang",
+			"Comment": "v0.2.0-52-g03a3fea",
+			"Rev": "03a3feaec4e514002b446197c10e8ee50e39574c"
+		},
+		{
+			"ImportPath": "github.com/vharitonsky/iniflags",
+			"Comment": "v.1.0-30-g743d690",
+			"Rev": "743d6901e7ca8ab61ac533a8c49939ac8b560e72"
+		},
+		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "4971afdc2f162e82d185353533d3cf16188a9f4e"
+		},
+		{
+			"ImportPath": "golang.org/x/net/publicsuffix",
+			"Rev": "4971afdc2f162e82d185353533d3cf16188a9f4e"
+		},
+		{
+			"ImportPath": "golang.org/x/sys/unix",
+			"Rev": "076b546753157f758b316e59bcb51e6807c04057"
+		}
+	]
+}

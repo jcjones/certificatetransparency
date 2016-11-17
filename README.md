@@ -30,3 +30,7 @@ ct-sql -config ./ct-sql.ini -censysUrl https://url_to_censys/path/certificates.j
 go get github.com/jcjones/ct-sql/cmd/ct-sql-netscan
 ct-sql-netscan -config ./ct-sql.ini -limit 10
 ```
+
+## Vendored Packages
+We're using `[godep](https://github.com/tools/godep)` to handle vendored dependencies.
+```godep save ./cmd/ct-sql/ ./cmd/ct-sql-netscan/ ./cmd/telemetry-update/ ./cmd/get-cert/```
