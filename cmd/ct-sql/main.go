@@ -122,7 +122,7 @@ func (ld *LogDownloader) Download(ctLogUrl string) {
 		}
 	}
 
-	log.Printf("[%s] %d total entries at %s\n", ctLogUrl, sth.TreeSize, sqldb.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
+	log.Printf("[%s] %d total entries at %s\n", ctLogUrl, sth.TreeSize, utils.Uint64ToTimestamp(sth.Timestamp).Format(time.ANSIC))
 	if origCount == sth.TreeSize {
 		log.Printf("[%s] Nothing to do\n", ctLogUrl)
 		return
@@ -142,7 +142,7 @@ func (ld *LogDownloader) Download(ctLogUrl string) {
 
 	logObj.MaxEntry = finalIndex
 	if finalTime != 0 {
-		logObj.LastEntryTime = sqldb.Uint64ToTimestamp(finalTime)
+		logObj.LastEntryTime = utils.Uint64ToTimestamp(finalTime)
 	}
 
 	log.Printf("[%s] Saved state. MaxEntry=%d, LastEntryTime=%s", ctLogUrl, logObj.MaxEntry, logObj.LastEntryTime)

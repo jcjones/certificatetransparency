@@ -114,10 +114,6 @@ type FirefoxPageloadIsTLS struct {
 	TimeAdded      time.Time `db:"timeAdded"`             // Date when this resolution was performed
 }
 
-func Uint64ToTimestamp(timestamp uint64) time.Time {
-	return time.Unix(int64(timestamp/1000), int64(timestamp%1000))
-}
-
 // Returns true if err is not nil, and is not a Duplicate entry error
 func errorIsNotDuplicate(err error) bool {
 	if err != nil {
@@ -606,7 +602,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 				CertID:    certID,
 				LogID:     logID,
 				EntryID:   uint64(entry.Index),
-				EntryTime: Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
+				EntryTime: utils.Uint64ToTimestamp(entry.Leaf.TimestampedEntry.Timestamp),
 			}
 			err = txn.Insert(certLogEntry)
 			if errorIsNotDuplicate(err) {
