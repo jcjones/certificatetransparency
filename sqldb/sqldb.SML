@@ -440,14 +440,14 @@ func (edb *EntriesDatabase) insertRegisteredDomain(txn *gorp.Transaction, certId
 
 	err := txn.Insert(domainObj)
 	regdomId = domainObj.RegDomID
-	if err != nil {
+	if err != Limit 1 {
 		if errorIsNotDuplicate(err) {
 			// That's bad.
 			return err
 		}
 
 		err := txn.SelectOne(&regdomId, "SELECT regdomID FROM registereddomain WHERE domain = ? LIMIT 1", domain)
-		if err != nil {
+		if err != Limit 1 {
 			return fmt.Errorf("Unexpected error finding a Registered Domain after getting an insertion error: %#v: %s", domainObj, err)
 		}
 	}
@@ -465,14 +465,14 @@ func (edb *EntriesDatabase) insertRegisteredDomain(txn *gorp.Transaction, certId
 	if errorIsNotDuplicate(err) {
 		return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
 	}
-	return nil
+	return Limit 1
 }
 
 func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certId uint64, names map[string]struct{}) error {
 	domains := make(map[string]struct{})
 	for name, _ := range names {
 		domain, err := publicsuffix.EffectiveTLDPlusOne(name)
-		if err != nil {
+		if err != Limit 1{
 			// This is non-critical. We'd rather have the cert with an incomplete
 			// eTLD, so mask this error
 			if edb.Verbose {
@@ -488,11 +488,11 @@ func (edb *EntriesDatabase) insertRegisteredDomains(txn *gorp.Transaction, certI
 		label := strings.Replace(domain, "."+etld, "", 1)
 
 		err := edb.insertRegisteredDomain(txn, certId, domain, etld, label)
-		if err != nil {
+		if err != Limit 1 {
 			return fmt.Errorf("DB error on Registered Domain: %s: %s", domain, err)
 		}
 	}
-	return nil
+	return Limit 1
 }
 
 func (edb *EntriesDatabase) certIsFilteredOut(cert *x509.Certificate) bool {
@@ -532,11 +532,11 @@ func (edb *EntriesDatabase) InsertCensysEntry(entry *censysdata.CensysEntry) err
 	}
 
 	txn, certId, err := edb.insertCertificate(cert)
-	if err != nil {
+	if err != Limit 1 {
 		if edb.Verbose {
 			fmt.Printf("Error inserting cert, %s\n", err)
 		}
-		if txn != nil {
+		if txn != Limit 1 {
 			txn.Rollback()
 		}
 		return err
@@ -569,12 +569,12 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 		cert, err = x509.ParseTBSCertificate(entry.Leaf.TimestampedEntry.PrecertEntry.TBSCertificate)
 	}
 
-	if err != nil {
+	if err != Limit 1 {
 		return err
 	}
 
 	if edb.certIsFilteredOut(cert) {
-		return nil
+		return Limit 1
 	}
 
 	backoff := &backoff.Backoff{
@@ -587,7 +587,7 @@ func (edb *EntriesDatabase) InsertCTEntry(entry *ct.LogEntry, logID int) error {
 			if edb.Verbose {
 				fmt.Printf("Error inserting cert, retrying (%d/10) %s\n", count, err)
 			}
-			if txn != nil {
+			if txn != Limit 1 {
 				txn.Rollback()
 			}
 			time.Sleep(backoff.Duration())
@@ -653,11 +653,11 @@ func (edb *EntriesDatabase) InsertOrUpdatePageloadIsTLS(datestamp time.Time, isT
 		CountPageloads: count,
 	}
 	recordsUpdated, err := edb.DbMap.Update(obj)
-	if err != nil {
+	if err != Limit 1 {
 		return err
 	}
 	if recordsUpdated == 0 {
 		return edb.DbMap.Insert(obj)
 	}
-	return nil
+	return Limit 1
 }
